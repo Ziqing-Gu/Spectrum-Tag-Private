@@ -19,7 +19,8 @@ SpectrumTag 将图片转换成黑白掩模，并通过处理音频的频率成�
 | 项目 | 当前状态 |
 | --- | --- |
 | 当前交付 | **1.4.27**，带“导出诊断”的 Windows Setup 与 macOS Universal PKG，附中英文 TXT 安装说明 |
-| 用户指定 Stable | **1.4.27**（2026-11-08），沿用已交付的 Windows 与 Mac 安装包；见 [Stable / Plan B 记录](docs/STABLE_1.4.27.md) |
+| 后续开发 | **1.4.28 Windows 独立版**：频谱视频新增 4:3、3:4、16:9、9:16 画幅。仅本地验证交付，以上 1.4.27 下载不含此功能；见 [验证记录](docs/WINDOWS_1.4.28.md) |
+| 用户指定 Stable | **1.4.28**（2026-11-09），Windows 独立版已交付；本版跨平台安装包生成中。上一完整安装包为 1.4.27；见 [Stable / Plan B 记录](docs/STABLE_1.4.28.md) |
 | Windows 安装包 | 实时 VST3、ARA 专用 VST3、独立程序；适用于 Windows 10/11 x64 |
 | macOS 安装包 | 实时/ARA VST3、实时/ARA AU、独立 App；目标为 macOS 15+，Apple Silicon + Intel |
 
@@ -50,7 +51,7 @@ SpectrumTag 将图片转换成黑白掩模，并通过处理音频的频率成�
 
 Print 可以超出原始文件的开始或结尾，导出时长会相应延长。视频超出原范围的部分补黑画面，原音画保持同步。源文件不被覆盖。
 
-**导出频谱视频**生成满屏纯频谱，无标题、刻度和时间文字，从最右侧逐渐显现并向左滚动。画面按 Tag 的时间、比例和频率刻度平滑调整，声音保持正常速度；重叠 Tag 优先跟随较早开始者。可选 MP4/MOV/MKV/WebM、720p/1080p/1440p/4K、30/60 fps，提供进度弹窗及取消。导出默认打开桌面目录，也可自行选择位置。
+**导出频谱视频**生成满屏纯频谱，无标题、刻度和时间文字，从最右侧逐渐显现并向左滚动。画面按 Tag 的时间、比例和频率刻度平滑调整，声音保持正常速度；重叠 Tag 优先跟随较早开始者。可选 MP4/MOV/MKV/WebM、30/60 fps，提供进度弹窗及取消。1.4.28 新增 4:3、3:4、16:9、9:16；分辨率按短边 720/1080/1440/2160 四档联动，菜单显示实际宽×高，默认 16:9 并记住上次选择。1.4.27 安装版仍使用 16:9。导出默认打开桌面目录，也可自行选择位置。
 
 ### 常用操作
 
@@ -107,7 +108,8 @@ SpectrumTag converts an image to a monochrome mask and processes audio frequenci
 | Item | Status |
 | --- | --- |
 | Current delivery | **1.4.27**, Windows Setup and macOS Universal PKG with Diagnostics, plus Chinese/English TXT installation guides |
-| User-designated Stable | **1.4.27** (2026-11-08), reusing the delivered Windows and Mac installers; see the [Stable / Plan B record](docs/STABLE_1.4.27.md) |
+| Subsequent development | **1.4.28 Windows standalone**: 4:3, 3:4, 16:9 and 9:16 spectrum video. Local validation delivery only; the 1.4.27 downloads above do not include this feature. See the [validation record](docs/WINDOWS_1.4.28.md). |
+| User-designated Stable | **1.4.28** (2026-11-09), with Windows standalone delivered and cross-platform installers in progress. The previous complete installer delivery is 1.4.27; see the [Stable / Plan B record](docs/STABLE_1.4.28.md). |
 | Windows installer | Realtime VST3, dedicated ARA VST3 and standalone; Windows 10/11 x64 |
 | macOS installer | Realtime/ARA VST3, realtime/ARA AU and standalone App; macOS 15+, Apple Silicon + Intel |
 
@@ -138,7 +140,7 @@ Load common audio formats or the soundtrack of MP4/M4V/MOV/MKV/WebM/AVI files. E
 
 Prints may extend before or after the source. Export duration expands accordingly; video receives black padding while the original audio and picture stay aligned. Source files are not overwritten.
 
-**Spectrum video export** fills the frame with the actual processed spectrum, without titles, axes or time labels. New content enters from the right edge and scrolls left. The view smoothly follows each Tag's time, proportions and frequency scale without changing audio playback speed; earlier-starting Tags take priority during overlaps. Choose MP4/MOV/MKV/WebM, 720p/1080p/1440p/4K and 30/60 fps. A progress dialog supports cancellation. Export dialogs start at the Desktop and allow another destination.
+**Spectrum video export** fills the frame with the actual processed spectrum, without titles, axes or time labels. New content enters from the right edge and scrolls left. The view smoothly follows each Tag's time, proportions and frequency scale without changing audio playback speed; earlier-starting Tags take priority during overlaps. Choose MP4/MOV/MKV/WebM and 30/60 fps. Version 1.4.28 adds 4:3, 3:4, 16:9 and 9:16, with four short-edge quality levels (720/1080/1440/2160) and actual width-by-height dimensions in the menu. It defaults to 16:9 and remembers the last choice; the 1.4.27 installers retain 16:9. A progress dialog supports cancellation. Export dialogs start at the Desktop and allow another destination.
 
 ### Controls
 
