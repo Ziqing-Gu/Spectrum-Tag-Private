@@ -71,7 +71,7 @@ Print 可以超出原始文件的开始或结尾，导出时长会相应延长�
 
 ### 安装与常见问题
 
-完整说明：[中文 TXT](docs/INSTALL-ZH-CN.txt) · [English TXT](docs/INSTALL-EN.txt)。安装前保存工程并完全退出宿主及独立版，安装时按需选择组件。
+完整说明：[安装说明（中文 TXT）](docs/安装说明.txt) · [English TXT](docs/INSTALL-EN.txt)。安装前保存工程并完全退出宿主及独立版，安装时按需选择组件。当前源代码中的说明面向正在生成的 1.4.28 安装包。
 
 - **Windows**：运行 `SpectrumTag-1.4.27-Windows-Setup.exe` 安装向导。VST3 安装到系统标准目录，独立程序目录可选择；包含所需微软 x64 运行库和媒体编解码器。
 - **macOS**：运行 `SpectrumTag-1.4.27-macOS.pkg`，安装到标准的 Applications / Audio Plug-Ins 目录，App 内含双架构媒体依赖，无需另装 Homebrew 或 FFmpeg。
@@ -160,7 +160,7 @@ Prints may extend before or after the source. Export duration expands accordingl
 
 ### Installation and development
 
-Read [English TXT instructions](docs/INSTALL-EN.txt) or [中文 TXT](docs/INSTALL-ZH-CN.txt). Save your project and quit hosts and SpectrumTag before installing; select the components you need.
+Read [English TXT instructions](docs/INSTALL-EN.txt) or [安装说明（中文 TXT）](docs/安装说明.txt). Save your project and quit hosts and SpectrumTag before installing; select the components you need. Guides in the current source describe the forthcoming 1.4.28 installers.
 
 - **Windows:** `SpectrumTag-1.4.27-Windows-Setup.exe` is an installation wizard. It uses the standard VST3 location, allows a standalone destination, and includes the required Microsoft x64 runtime and media codec.
 - **macOS:** `SpectrumTag-1.4.27-macOS.pkg` installs to standard Applications / Audio Plug-Ins locations. Bundled media dependencies require neither Homebrew nor a separate FFmpeg installation.
