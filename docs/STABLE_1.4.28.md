@@ -25,3 +25,7 @@ Authority: `D:\备份文件\Vibe Coding\Plan-ABCDEFG-开发与发布执行规范
 Use a new writable workspace to reproduce; never build in the frozen snapshot. CMake pins JUCE 8.0.15 and ARA SDK 2.3 commit `0005c532bb03eb210e7bb490329fc6d7ba1792c7`. Windows build scripts accept external build/JUCE/runtime paths. Preserve all three required codec inputs. The existing Mac workflows build arm64/x86_64 natively, bundle matching media dependencies, validate AU/VST3 and merge/install a Universal PKG.
 
 At designation, 1.4.28 Mac products, version-matched Windows plug-ins and both installation packages are still to be generated under the user's separate delivery request. All UI/audio feature changes this version are in standalone spectrum-video export; the shared audio Print implementation is unchanged. Raw user diagnostics/media are not uploaded. Existing AGPL-3.0 and third-party notices are retained. Actual DAW field acceptance remains separate from automated checks.
+
+## Subsequent delivery completion
+
+The separately requested cross-platform packages, native and actual-install checks, public Release and Desktop handoff subsequently completed on 2026-11-09; see [the installation record](INSTALLERS_1.4.28.md). This addendum does not modify the original designation or access/refresh the frozen backup.

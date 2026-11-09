@@ -2,6 +2,14 @@
 
 维护日期：2026-11-09。本文件是后续维护的统一入口：记录当前架构、需求演变、开发过程、问题诊断、验证边界与平台交接。面向用户的操作说明见 [README](README.md)。
 
+## 当前完成状态：1.4.28 安装包、公开 Release 与增量交接（2026-11-09）
+
+继承此前 Windows 独立版交付、Stable 指定和已完成的新 Plan B。本次补齐两个 Windows VST3、Mac 双架构 VST3/ARA/AU/独立版及两平台安装包；未重复独立版构建，未访问或刷新冻结备份。Windows 实装、安装后媒体/四种画幅/UI 检查，以及 Mac 原生和 Universal PKG 实装均通过。构建源码 `1bd36269f90bd3e99551620511ec12014d83a3c4`；详细哈希和范围见 [安装包验证](docs/INSTALLERS_1.4.28.md)。
+
+用户明确确认“验证完成后公开发布到 Release”，随后发布 [1.4.28 Stable](https://github.com/Ziqing-Gu/Spectrum-Tag-Private/releases/tag/v1.4.28)。桌面 `C:\Users\86189\Desktop\SpectrumTag-1.4.28-Installers` 为真实四文件交付：Win Setup、Mac PKG、`安装说明.txt` 和 `Installation-Guide.txt`，与 D 盘成品逐一哈希一致。GitHub 会自动改写中文附件名，因此另附完整下载 ZIP 保留中文文件名；安装包内部与本地文件均已使用中文名。
+
+验证：[Windows 实装](https://github.com/Ziqing-Gu/Spectrum-Tag-Private/actions/runs/42564174659)、[Mac 双架构与 PKG 实装](https://github.com/Ziqing-Gu/Spectrum-Tag-Private/actions/runs/42562703901)。本次只申请新的增量 PR，保留上游已添加的致谢和项目名，不自动合并。原作者的审阅入口见 [1.4.28 交接](docs/UPSTREAM_HANDOFF_1.4.28.md)。下文的“生成中”等文字是执行时的历史状态，以本节完成记录为准。
+
 ## 当前状态：1.4.28 Stable，Plan B 后继续安装包与上游交接（2026-11-09）
 
 用户明确指定 1.4.28 为 Stable，要求先执行新的 Plan B，再将当前源码同步到个人 Fork，生成 Windows Setup 与 macOS Universal PKG（含 AU/ARA/独立版），附中英文 TXT 安装说明，中文版文件名使用中文，最后提交给原作者申请合并。此前 [PR #3](https://github.com/sweetorange1/SpectrumTag/pull/3) 已于 2026-11-08 合并；本轮应另建仅包含后续变化的增量 PR。

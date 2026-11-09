@@ -43,3 +43,7 @@ Build: `D:\Codex\Temp\SpectrumTag-1.4.20\windows` (reused incrementally).
 New logs/media: `D:\Codex\Temp\SpectrumTag-1.4.28`.
 
 Delivery: `D:\Codex\Outputs\SpectrumTag-1.4.28-Windows`.
+
+## Subsequent cross-platform delivery
+
+After the user designated 1.4.28 Stable and requested installers, the standalone binary above was reused in the validated Windows Setup; matched Mac Universal PKG and bilingual guides were also delivered. See [INSTALLERS_1.4.28.md](INSTALLERS_1.4.28.md). The earlier Windows-only scope above is retained as history.
