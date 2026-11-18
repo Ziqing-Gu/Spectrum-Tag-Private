@@ -11,28 +11,55 @@ on:
 permissions:
   contents: read
 jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    # Draft releases are visible only to identities with push access.
+    # This job downloads data and never checks out or executes the product.
+    permissions:
+      contents: write
+    steps:
+      - name: Fetch the draft installer pinned to this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EXPECTED_HASH: ${{ inputs.sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$EXPECTED_HASH" =~ ^[0-9A-Fa-f]{64}$ ]]
+          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)" = "$GITHUB_SHA"
+          name="SpectrumTag-${RELEASE_TAG#v}-Windows-Setup.exe"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir input
+          echo "$EXPECTED_HASH  input/$name" | sha256sum -c -
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-under-test
+          path: input/*.exe
+          retention-days: 1
   install:
+    needs: fetch
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Download the exact installer and check its identity
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer-under-test
+          path: input
+      - name: Check installer identity
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           EXPECTED_HASH: ${{ inputs.sha256 }}
         run: |
           $ErrorActionPreference='Stop'
           $version=[regex]::Match((Get-Content CMakeLists.txt -Raw),'project\(SpectrumTag VERSION ([0-9.]+)').Groups[1].Value
           if(!$version -or $env:RELEASE_TAG -ne "v$version"){throw 'Release and source version differ'}
-          $release=gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json targetCommitish | ConvertFrom-Json
-          if($release.targetCommitish -ne $env:GITHUB_SHA){throw 'Release is not pinned to this source commit'}
-          New-Item -ItemType Directory input,checks | Out-Null
-          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern "SpectrumTag-$version-Windows-Setup.exe" --dir input
-          if($LASTEXITCODE){throw 'Download failed'}
           $setup=Get-Item "input/SpectrumTag-$version-Windows-Setup.exe"
-          if((Get-FileHash $setup.FullName -Algorithm SHA256).Hash -ne $env:EXPECTED_HASH){throw 'Installer hash mismatch'}
+          if((Get-FileHash -Algorithm SHA256 $setup).Hash -ne $env:EXPECTED_HASH){throw 'Installer hash differs'}
+          New-Item -ItemType Directory checks | Out-Null
           "PRODUCT_VERSION=$version" >> $env:GITHUB_ENV
           "INSTALLER_PATH=$($setup.FullName)" >> $env:GITHUB_ENV
       - name: Install all components on the disposable runner
