@@ -12,7 +12,7 @@ Based on [sweetorange1 / SpectrumTag](https://github.com/sweetorange1/SpectrumTa
 
 ### 这是什么？
 
-SpectrumTag 将图片转换成黑白掩模，并通过处理音频的频率成分，在频谱中留下图形。可以实时试听，也可以在录制或加载音频后编辑 Print，再导出处理结果。独立版还支持直接在空白时间轴上打印，并导出声音或纯频谱动画。
+SpectrumTag 将 Logo 转换为黑白掩模，或将复杂图像转换为灰度掩模，并通过处理音频的频率成分，在频谱中留下图形。可以实时试听，也可以在录制或加载音频后编辑 Print，再导出处理结果。独立版还支持直接在空白时间轴上打印，并导出声音或纯频谱动画。
 
 ### 版本与下载
 
@@ -62,7 +62,7 @@ Print 可以超出原始文件的开始或结尾，导出时长会相应延长�
 | --- | --- |
 | 鼠标滚轮 | 左右平移频谱 |
 | Ctrl / Shift + 滚轮 | 调整横向视图缩放；选中 Print 时只改变视图，不重新渲染 |
-| 选中 Print 后拖动 Speed 拉杆 | 改变打印时长，完成操作后重新渲染 |
+| 选中 Print 后拖动 Speed 拉杆 | 实时预览打印时长，点击「打印」后应用 |
 | 单击已打印图形 | 选中并恢复其参数和正常显示比例，不移动播放指针 |
 | 拖动已选 Print / 右下角 | 移动位置 / 等比例缩放 |
 | 双击原图 | 选择新图片 |
@@ -117,6 +117,10 @@ SpectrumTag converts an image to a monochrome mask and processes audio frequenci
 
 Download the [2.0.10 installers and TXT guides](https://github.com/Ziqing-Gu/Spectrum-Tag-Private/releases/tag/v2.0.10). Earlier installers are available in the release history.
 
+### Ziqing image editing
+
+Right-click to toggle the source. While it is visible, drag a control for a spectrum prediction and release to return to the converted artwork. With the source hidden, changes appear on the selected printed pattern. Click Print to commit. You can cancel a render in progress.
+
 ### Choose your edition
 
 | Edition | Workflow |
@@ -150,7 +154,7 @@ Prints may extend before or after the source. Export duration expands accordingl
 | --- | --- |
 | Mouse wheel | Pan horizontally |
 | Ctrl / Shift + wheel | Change horizontal view zoom; selected Prints do not re-render |
-| Drag Speed with a Print selected | Change Print duration and render after the edit |
+| Drag Speed with a Print selected | Preview the new duration. Click Print to apply |
 | Click a printed shape | Select it and recall its parameters and normal display proportions without seeking |
 | Drag a selected Print / its lower-right corner | Move / resize proportionally |
 | Double-click the original image | Choose another image |
@@ -182,3 +186,13 @@ See the [development overview](PROJECT_OVERVIEW.md), [changelog](CHANGELOG.md), 
 The project remains under **GNU Affero General Public License v3.0 (AGPL-3.0)**; see [LICENSE](LICENSE) for the full terms. Third-party dependencies and media codecs retain their own licenses and notices, supplied with the corresponding components.
 
 © iisaacbeats.cn. 原作者署名与版权信息保留。 / Original author attribution and copyright notices retained.
+
+### 版本记录与历史下载 / Version history and earlier downloads
+
+| 版本 / Version | 变化 / Change |
+| --- | --- |
+| 2.0.10 | 实时插件与 ARA 共用子青版图像编辑。Shared image editing in the realtime and ARA plug-ins. |
+| 2.0.9 Stable | 子青版独立程序确立两种编辑模式。Standalone source-image and printed-pattern editing. |
+| 1.4.28 Stable | 频谱视频增加四种画幅。Four aspect ratios for spectrum video. |
+
+更早版本见 [完整更新记录 / Full changelog](CHANGELOG.md) 和 [历史安装包 / Earlier installers](https://github.com/Ziqing-Gu/Spectrum-Tag-Private/releases)。

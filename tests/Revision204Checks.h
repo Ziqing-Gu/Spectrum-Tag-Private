@@ -418,6 +418,7 @@ static void revision204Checks(const juce::File& dir,bool filePlayer=true){
         fitSpectrum(*canvas);pump();
         wait([&]{return (int)canvas->getProperties()["rasterRevision"]==p.recording().snapshot()->revision;},"204 before deletion raster");
         auto compareDeletion=[&](const PrintEdit& removed){
+            wait([&]{return static_cast<SpectrumTagAudioProcessorEditor*>(deletionEditor.get())->captureResumePlot().isValid();},"comparison starts on the selected frequency range and time window");
             const auto& props=canvas->getProperties();const double start=(double)props["displayStart"],end=(double)props["displayEnd"];
             const int width=canvas->getWidth()-70,height=canvas->getHeight()-102;
             const auto xAt=[&](double t){return 70+juce::roundToInt((t-start)/(end-start)*width);};
