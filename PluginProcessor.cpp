@@ -1523,7 +1523,7 @@ void SpectrumTagAudioProcessor::getStateInformation (juce::MemoryBlock& destData
     tree.setProperty("viewEnd",s.viewEnd,nullptr);tree.setProperty("viewZoom",s.viewZoom,nullptr);
     tree.setProperty("viewFollow",s.viewFollow,nullptr);tree.setProperty("viewFit",s.viewFit,nullptr);tree.setProperty("viewValid",s.viewValid,nullptr);
     tree.setProperty("selectedPrint",s.selectedPrint,nullptr);tree.setProperty("placementId",s.placementId,nullptr);
-    if(filePlayerMode)tree.setProperty("standaloneCopyOrigin",s.standaloneCopyOrigin,nullptr);
+    tree.setProperty("standaloneCopyOrigin",s.standaloneCopyOrigin,nullptr);
     tree.setProperty ("imgBoxWidthPx", s.imgBoxWidthPx, nullptr);
     tree.setProperty("spectrumHeightPx",s.spectrumHeightPx,nullptr);
     tree.setProperty ("imagePath",     s.imagePath,     nullptr);
@@ -1589,7 +1589,7 @@ void SpectrumTagAudioProcessor::setStateInformation (const void* data, int sizeI
         if(!std::isfinite(s.viewEnd))s.viewEnd=0;if(!std::isfinite(s.viewZoom)||s.viewZoom<=0)s.viewZoom=1;
         s.viewFollow=(bool)tree.getProperty("viewFollow",true);s.viewFit=(bool)tree.getProperty("viewFit",false);s.viewValid=(bool)tree.getProperty("viewValid",false);
         s.selectedPrint=tree.getProperty("selectedPrint").toString();s.placementId=tree.getProperty("placementId").toString();
-        if(filePlayerMode)s.standaloneCopyOrigin=tree.getProperty("standaloneCopyOrigin").toString();
+        s.standaloneCopyOrigin=tree.getProperty("standaloneCopyOrigin").toString();
         s.imagePath     = tree.getProperty ("imagePath",     s.imagePath).toString();
         s.imgRectXNorm  = (float) tree.getProperty ("imgRectXNorm",  s.imgRectXNorm);
         s.imgRectYNorm  = (float) tree.getProperty ("imgRectYNorm",  s.imgRectYNorm);

@@ -154,6 +154,7 @@ static void checks(const juce::File& dir) {
     revision147Checks(dir);
     revision148Checks(dir);
     revision201Checks(dir);
+    revision204Checks(dir,false);
     revision202Checks(dir);
     revision149Checks(dir);
     revision1410Checks(dir);
@@ -200,12 +201,12 @@ int main(int argc,char**argv) {
         return 1;
     }catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}
     if(argc==3&&std::string(argv[1])=="--checks1427"){try{revision1427Checks(juce::File(argv[2]));return 0;}catch(const std::exception& e){std::cerr<<"FAIL: "<<e.what()<<"\n";return 1;}}
-    if(argc==3&&(std::string(argv[1])=="--checks201"||std::string(argv[1])=="--checks202"||std::string(argv[1])=="--checks204")){try{juce::File dir(argv[2]);dir.createDirectory();
+    if(argc==3&&(std::string(argv[1])=="--checks210"||std::string(argv[1])=="--checks201"||std::string(argv[1])=="--checks202"||std::string(argv[1])=="--checks204")){try{juce::File dir(argv[2]);dir.createDirectory();
       #if JUCE_WINDOWS
         _putenv_s("SPECTRUMTAG_PREFS_DIR",dir.getChildFile("preferences-test").getFullPathName().toRawUTF8());
       #endif
         writeTestFixtures(dir);
-        if(std::string(argv[1])=="--checks204")revision204Checks(dir);else if(std::string(argv[1])=="--checks202")revision202Checks(dir);else revision201Checks(dir);
+        if(std::string(argv[1])=="--checks210")revision204Checks(dir,false);else if(std::string(argv[1])=="--checks204")revision204Checks(dir);else if(std::string(argv[1])=="--checks202")revision202Checks(dir);else revision201Checks(dir);
         return 0;}catch(const std::exception& e){std::cerr<<"FAIL: "<<e.what()<<"\n";return 1;}}
     if(argc==3 && (std::string(argv[1])=="--checks1410"||std::string(argv[1])=="--checks1412"||std::string(argv[1])=="--checks1421")) {try {juce::File dir(argv[2]);dir.createDirectory();
       #if JUCE_WINDOWS

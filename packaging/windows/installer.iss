@@ -1,5 +1,5 @@
 #ifndef Version
-#define Version "2.0.9"
+#define Version "2.0.10"
 #endif
 #ifndef Payload
   #error Define Payload as the staged Windows component directory
@@ -17,6 +17,7 @@ AppPublisherURL=https://github.com/Ziqing-Gu/Spectrum-Tag-Private
 DefaultDirName={autopf}\iisaacbeats.cn\SpectrumTag
 DefaultGroupName=SpectrumTag
 DisableProgramGroupPage=yes
+DisableDirPage=no
 LicenseFile={#Payload}\Docs\LICENSE.txt
 OutputDir={#Output}
 OutputBaseFilename=SpectrumTag-{#Version}-Windows-Setup

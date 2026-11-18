@@ -32,7 +32,7 @@ static void revision1412Checks(const juce::File& dir) {
     auto covered=printPreview(overlap,e,7).rescaled(160,65);require(covered.getPixelAt(30,12)==spectrumColour(7,0),"1412 overlapping Prints are composed in order");
     // 新模型：聚焦后修改 Noise Fill 会撤掉这次打印、退回未打印态；重新打印
     // 才把新的补偿值渲染进音频。旧版“选中打印的实时预览”随三态改造移除。
-    auto state=p.getEditorState();state.palette=7;state.chinese=false;state.imagePath=e.imagePath;state.imageVisible=true;
+    auto state=p.getEditorState();state.palette=7;state.chinese=false;state.imagePath=e.imagePath;state.imageVisible=false;
     // 以“已打印并聚焦”的状态打开编辑器：等价于用户点中了这个打印。
     state.selectedPrint=e.id;state.placementId=e.id;state.viewValid=true;state.viewFit=false;state.viewFollow=false;state.viewZoom=1;state.viewEnd=e.start+.2;
     p.setEditorState(state);
@@ -45,13 +45,13 @@ static void revision1412Checks(const juce::File& dir) {
     fill->onDragStart();fill->setValue(.1,juce::sendNotificationSync);juce::Thread::sleep(210);tickUI();
     require(p.recording().snapshot()->revision==revision,"1412 Fill gesture never renders audio while dragging");
     fill->onDragEnd();
-    for(int i=0;i<300&&!p.recording().edits()->empty();++i){juce::Thread::sleep(10);tickUI();}
-    require(p.recording().edits()->empty(),"1412 releasing a Fill gesture reverts the focused Print to unprinted");
+    juce::Thread::sleep(220);tickUI();
+    require(p.recording().edits()->size()==1&&p.recording().snapshot()->revision==revision,"releasing Fill keeps the original audio");
     auto* print=dynamic_cast<juce::Button*>(componentWithID(*editor,"printButton"));require(print!=nullptr,"1412 Print entry");
     print->onClick();require(p.recording().flush(),"1412 reprint after Fill change");tickUI();
     require(p.recording().edits()->size()==1&&std::abs(p.recording().edits()->front().compensation-.1f)<1e-6,"1412 reprint uses the new Fill value");
     editor->keyPressed(juce::KeyPress('Z',juce::ModifierKeys::ctrlModifier,0));require(p.recording().flush(),"1412 undo reprint");tickUI();
-    require(p.recording().edits()->empty(),"1412 undo reprint removes the Print again");
+    require(p.recording().edits()->size()==1&&sameEdit(p.recording().edits()->front(),rendered->edits.front()),"undo restores original Print and Noise Fill");
     // Largest preview size, reporting actual cost instead of a flaky timing gate.
     auto large=e;large.rows=513;large.cols=512;large.mask=std::make_shared<const std::vector<float>>(513*512,0.f);
     double total=0;for(int i=0;i<12;++i){large.compensation=.2f+i*.05f;const auto start=juce::Time::getMillisecondCounterHiRes();auto image=printPreview(*rendered,large,7);total+=juce::Time::getMillisecondCounterHiRes()-start;require(image.isValid(),"1412 full-sized preview");}

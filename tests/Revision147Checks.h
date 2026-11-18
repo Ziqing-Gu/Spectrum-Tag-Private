@@ -24,7 +24,7 @@ static void revision147Checks(const juce::File& dir){
     auto paint=[&]{return editor->createComponentSnapshot(editor->getLocalBounds());};
     auto bounds=[&]{paint();auto& v=view->getProperties();return juce::Rectangle<float>((float)v["selectedX"],(float)v["selectedY"],(float)v["selectedW"],(float)v["selectedH"]);};
     const auto started=juce::Time::getMillisecondCounterHiRes();print->onClick();const double feedbackMs=juce::Time::getMillisecondCounterHiRes()-started;
-    require(!box->isVisible()&&(bool)view->getProperties()["previewActive"],"Print immediately hides source and shows simulation");
+    require(componentWithID(*editor,"cancelPrint")->isVisible()&&(bool)view->getProperties()["previewActive"],"Print immediately provides preview and cancellation");
     png(dir.getChildFile("147-print-progress.png"),paint());
     require((float)view->getProperties()["renderProgress"]>=0&&(float)view->getProperties()["renderProgress"]<1,"pending Print shows bounded real progress");
     require(p.recording().flush(),"147 Print completes");const auto renderMs=juce::Time::getMillisecondCounterHiRes()-started;
@@ -41,8 +41,8 @@ static void revision147Checks(const juce::File& dir){
     const int beforeChoice=rangeControl->getSelectedId();
     rangeControl->setSelectedId(beforeChoice==1?2:1,juce::sendNotificationSync);
     juce::Thread::sleep(220);tickUI();
-    require(p.recording().edits()->empty(),"editing a focused object removes its Print");
-    require(box->isVisible()&&box->hasImage(),"object returns to the unprinted state");
+    require(p.recording().edits()->size()==1&&sameEdit(p.recording().edits()->front(),edit),"editing the range leaves the Print intact");
+    require(!box->isVisible()&&box->hasImage(),"hidden source retains the selected Print");
     rangeControl->setSelectedId(beforeChoice,juce::sendNotificationSync);juce::Thread::sleep(220);tickUI();
     print->onClick();require(p.recording().flush(),"reprint after revert");tickUI();
     require(p.recording().snapshot()->edits.size()==1,"reprint creates a fresh Print");
@@ -51,7 +51,7 @@ static void revision147Checks(const juce::File& dir){
     click();
     editor->keyPressed(juce::KeyPress(juce::KeyPress::deleteKey));require(p.recording().flush(),"delete focused object");tickUI();
     auto cleared=p.recording().snapshot();
-    require(cleared->edits.empty()&&!box->hasImage(),"Delete destroys the object and its Print");
+    require(cleared->edits.empty()&&box->hasImage(),"Delete removes the Print and keeps reusable artwork");
     for(size_t t=0;t<cleared->spectrum.size();++t)require(cleared->spectrum[t]==cleared->originalSpectrum[t],"148 independent Delete directly restores cached original spectrum tiles");
     for(int64_t i=cleared->first;i<cleared->last;++i)require(cleared->sample(0,i)==cleared->sample(0,i,false),"Delete moved Print removes all noise and restores original samples");
     std::cout<<"147_TIMING immediate_feedback_ms="<<feedbackMs<<" render_ms="<<renderMs<<"\n";

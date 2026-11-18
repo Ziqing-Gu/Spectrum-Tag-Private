@@ -83,7 +83,7 @@ static void revision1410Checks(const juce::File& dir) {
         slider.setValue(.4,juce::dontSendNotification);const float x=slider.getPositionOfValue(.4);slider.mouseDown(event(x,false));slider.mouseDrag(event(x+20,false));const auto atShift=slider.getValue();slider.mouseDrag(event(x+20,true));require(slider.getValue()==atShift,"1410 pressing Shift mid-drag does not jump");slider.mouseDrag(event(x+40,true));const auto atRelease=slider.getValue();slider.mouseDrag(event(x+40,false));require(slider.getValue()==atRelease,"1410 releasing Shift mid-drag does not jump");slider.mouseDrag(event(x+50,false));slider.mouseUp(event(x+50,false));
         slider.setValue(.4,juce::dontSendNotification);slider.mouseDown(event(290,true));require(std::abs(slider.getValue()-.4)<1e-6,"1410 Shift click does not jump to cursor");slider.mouseUp(event(290,true));
         require(begins==4&&ends==4,"1410 Shift transitions remain a single automation gesture");
-        auto wheelEvent=event(100,false,false);juce::MouseWheelDetails wheel;wheel.deltaY=.2f;wheel.isSmooth=true;
+        auto wheelEvent=event(100,false,false);juce::MouseWheelDetails wheel{};wheel.deltaY=.2f;wheel.isSmooth=true;
         slider.setValue(.4,juce::dontSendNotification);slider.mouseWheelMove(wheelEvent,wheel);const double normalWheel=slider.valueToProportionOfLength(slider.getValue())-slider.valueToProportionOfLength(.4);
         slider.setValue(.4,juce::dontSendNotification);juce::Thread::sleep(2);slider.mouseWheelMove(event(100,true,false),wheel);const double fineWheel=slider.valueToProportionOfLength(slider.getValue())-slider.valueToProportionOfLength(.4);
         require(std::abs(fineWheel/normalWheel-.1)<.0001,"1410 Shift wheel is ten times finer");

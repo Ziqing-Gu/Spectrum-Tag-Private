@@ -1045,3 +1045,9 @@ AGPL-3.0，详见 [LICENSE](LICENSE) 与 [README.md](README.md) 的许可证章�
 用户指定 Windows 独立版 2.0.9 为 Stable。2.0.4 至 2.0.9 依次改进实时模拟预览、显式打印与取消、底层频谱恢复、移动与复制、风格切换，以及图片与已打印图案两种编辑模式。上一公开完整安装包为 1.4.28。2.0.9 Windows 独立版 SHA-256 为 99FDFE4B84D9A40E60949BD72B29095A2149DBD70A497DF1D1A803352A27599B。已通过鼠标事件、回归与安装位置启动验证。插件交互移植属于后续版本。
 
 The user designated the Windows standalone 2.0.9 as Stable. In image mode the spectrum prediction follows a parameter gesture and the converted artwork returns on release. In Print mode the prediction remains until the user commits. Right-click toggles the source, and reopening it in empty space centres a new placement. The last published cross-platform installer is 1.4.28.
+
+## 2.0.10 · 子青版插件移植
+
+实时 VST3、AU 与 ARA 沿用 2.0.9 独立版的两种编辑模式。右键显隐原图，参数预览保留已提交音频，点击打印提交，取消还原该次打印。实时宿主保留 Record 与本机试听，ARA 保留事件范围、宿主定位和按音源恢复。独立版保留空白时间轴与媒体导出。
+
+The plug-in editors share the standalone artwork and printed-pattern workflow. Recording, ARA region projection and standalone file export keep their format-specific paths.

@@ -1,9 +1,9 @@
 #pragma once
 #include "shared/PrintPreview.h"
-// Standalone-only interaction contract. Plugin mode is covered by 201/202 unchanged.
-static void revision204Checks(const juce::File& dir){
+// Shared editing contract exercised with a standalone and a recording plug-in.
+static void revision204Checks(const juce::File& dir,bool filePlayer=true){
     using namespace spectrumtag;
-    SpectrumTagAudioProcessor p;p.filePlayerMode=true;
+    SpectrumTagAudioProcessor p;p.filePlayerMode=filePlayer;
     p.setRateAndBufferSizeDetails(48000,256);p.prepareToPlay(48000,256);
     juce::AudioBuffer<float> source(1,96000);source.clear();
     p.recording().setArmed(true);p.recording().capture(source,0,48000,true);p.recording().setArmed(false);
@@ -467,5 +467,5 @@ static void revision204Checks(const juce::File& dir){
         std::cout<<"204_ACCURACY "<<suffix<<" mean_brightness_error="<<error/count<<" old_overlay_error="<<oldError/count<<"\n"<<std::flush;
         require(error/count<.08&&error<oldError*.6,"204 complex prediction is closer to audio than black overlay");
     }
-    std::cout<<"2.0.9 STANDALONE PRINT AND PREVIEW CHECKS PASSED\n"<<std::flush;
+    std::cout<<"2.0.10 PRINT AND PREVIEW CHECKS PASSED\n"<<std::flush;
 }

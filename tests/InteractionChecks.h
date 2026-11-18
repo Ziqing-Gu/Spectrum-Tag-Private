@@ -26,7 +26,7 @@ static void interactionChecks(const juce::File& dir) {
     amount->mouseDown(alt);amount->mouseUp(alt);
     require(std::abs(*p.getAPVTS().getRawParameterValue(ParameterIDs::imageAmount)-.5f)<1e-5,"Alt-left click resets amount and parameter");
     // 图片可见性由三态决定：没有眼睛按钮，也没有空框可隐藏。
-    require(componentWithID(*editor,"imageVisibility")==nullptr,"visibility toggle removed from the new interaction");
+    require(componentWithID(*editor,"imageVisibility")!=nullptr,"live plugin has the source visibility toggle");
     juce::Timer::callPendingTimersSynchronously();
     // 录音/ARA 模式的音频来自宿主：没有图片对象时显示投放引导。
     require(imageBox(*editor)->isVisible()&&!imageBox(*editor)->hasImage(),"a record-mode editor shows the drop guide before an image");

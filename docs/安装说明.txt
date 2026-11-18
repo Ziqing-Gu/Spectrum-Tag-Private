@@ -1,14 +1,14 @@
-SpectrumTag 1.4.28 — Windows / macOS 安装与常见问题
+SpectrumTag 2.0.10 — Windows / macOS 安装与常见问题
 
-本版新增：独立版“导出频谱视频”可选择 4:3、3:4、16:9、9:16，分辨率自动匹配，记住上次选择。4:3、16:9 为横屏；3:4、9:16 为竖屏。Tag 保持原比例；原视频画面导出仍保留原画幅。
-安装后确认程序或插件显示 1.4.28。本版已由维护者指定为 Stable，上一完整跨平台 Stable 为 1.4.27；这不代表每一款 DAW 都已逐一现场验收。
+子青版 2.0.10 将独立版的图片编辑方式带到实时插件和 ARA。
+安装后，打开所选组件，左上角应显示「子青版」和 v2.0.10。
 若遇到 Print 完成后内部不显示等异常，先不要关闭窗口、播放或切换刻度，点右上角“导出诊断”（英文为 Diagnostics）保存 JSON，并手动反馈。每个有问题的组件可分别保存一份。
 报告只含系统/宿主规格、参数、处理和显示状态及聚合统计，不含音频、图片、截图、工程、原文件名或路径，也不会自动上传。采集不会重新 Print、FFT 或强制重绘。
 
 一、选择安装包
-Windows：SpectrumTag-1.4.28-Windows-Setup.exe，适用于 Windows 10/11 64 位。
-macOS：SpectrumTag-1.4.28-macOS.pkg，适用于 macOS 15 或更新版本，包含 Apple Silicon 和 Intel 双架构。
-这两个包的所有组件版本均为 1.4.28。既有 VST3、ARA、AU 的音频打印逻辑不变，本版新增功能位于独立版视频导出。
+Windows：SpectrumTag-2.0.10-Windows-Setup.exe，适用于 Windows 10/11 64 位。
+macOS：SpectrumTag-2.0.10-macOS.pkg，适用于 macOS 15 或更新版本，包含 Apple Silicon 和 Intel 双架构。
+图片显示时，拖动参数可预览频谱，松手恢复黑白或灰度图。图片隐藏时，单击已打印的图案可以实时预览参数变化。点击图片下方的「打印」才会应用，渲染期间可取消。独立版可在空白处打印。实时插件先录音，ARA 先加载事件，才有可编辑的音频。
 
 Windows 包：实时 VST3、ARA 专用 VST3、独立 EXE。
 Mac 包：实时 VST3、ARA 专用 VST3、实时 AU、ARA AU、独立 App。

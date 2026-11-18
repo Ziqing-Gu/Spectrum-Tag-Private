@@ -1,14 +1,14 @@
-SpectrumTag 1.4.28 — Windows / macOS Installation and Troubleshooting
+SpectrumTag 2.0.10 — Windows / macOS Installation and Troubleshooting
 
-New in this version: standalone spectrum-video export offers 4:3, 3:4, 16:9 and 9:16 with matching dimensions and a remembered choice. 4:3/16:9 are landscape; 3:4/9:16 are portrait. Tags retain their proportions. Original-picture video export retains the source framing.
-After installation, confirm version 1.4.28. The maintainer designated this version Stable; the previous complete cross-platform Stable is 1.4.27. This is not a claim of field acceptance in every DAW.
+Ziqing Edition 2.0.10 brings the standalone image editor to the realtime and ARA plug-ins.
+After installation, open each selected component and check for (子青版) and v2.0.10 in its header.
 If Print finishes but is not displayed, click Diagnostics BEFORE closing the editor, starting playback or changing scale. Save the JSON and send it back manually; capture each affected component separately.
 Reports include system/host details, parameters, processing/display status and aggregate statistics, without audio, images, screenshots, project data, source names/paths or automatic upload. Capturing a report does not trigger Print, FFT or a forced redraw.
 
 1. Packages and requirements
-Windows: SpectrumTag-1.4.28-Windows-Setup.exe, Windows 10/11 x64.
-macOS: SpectrumTag-1.4.28-macOS.pkg, macOS 15 or later, Apple Silicon and Intel universal binaries.
-All packaged components are version 1.4.28. Existing VST3/ARA/AU audio Print processing is unchanged; this version adds standalone video export options.
+Windows: SpectrumTag-2.0.10-Windows-Setup.exe, Windows 10/11 x64.
+macOS: SpectrumTag-2.0.10-macOS.pkg, macOS 15 or later, Apple Silicon and Intel universal binaries.
+With the source visible, drag a parameter for a spectrum preview. Release to see the converted artwork again. With the source hidden, select a printed pattern to preview changes directly on it. Click Print below the artwork to commit. Cancel is available while rendering. The standalone also prints on an empty canvas. Record audio in the realtime plug-in or load events in ARA to edit a permanent Print.
 Windows includes realtime VST3, dedicated ARA VST3 and the standalone EXE.
 Mac includes realtime VST3, ARA VST3, realtime AU, ARA AU and the standalone App.
 There is no VST2 build. Components can be selected during installation.

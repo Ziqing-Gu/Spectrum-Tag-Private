@@ -62,6 +62,7 @@ struct RecordingSnapshot {
     bool empty() const {return last<=first;}
     float sample(int channel,int64_t absolute,bool processed=true) const;
     bool contains(int64_t absolute) const;
+    bool overlaps(double startSeconds,double endSeconds) const;
     const SpectrumFrame* frameAt(double seconds,bool processed=true) const;
 };
 

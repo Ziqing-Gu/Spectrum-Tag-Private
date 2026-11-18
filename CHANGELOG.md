@@ -1,5 +1,11 @@
 # Change history
 
+## 2.0.10 · 子青版 / Ziqing Edition
+
+- 插件与独立版共用显隐原图、实时预测和手动提交打印。拖动图案与拖动其原图分别用于移动和复制。
+- Realtime and ARA plug-ins share the standalone image and Print editors. Dragging previews the change. Click Print to apply, or cancel a pending render.
+
+
 2026-11-16: source version raised to **2.0.3**. The image style menu now names the two modes **Logo mode** and **Complex image** (Complex image is the continuous grayscale attenuation introduced in 2.0.2); the hover text and the Logo threshold labels were updated, and the group that does not apply to the active mode is hidden instead of greyed out, so the panel collapses the empty rows. Verified with SpectrumTagStandalone / SpectrumTag_VST3 / SpectrumTagVerify builds, the standalone fileless UI regression, `--checks202` (mode names, control visibility, grayscale masks) and the full `--checks`; no 2.0.3 installers were produced.
 
 2026-11-14: source version raised to **2.0.2**. The spectrum right-click now prints the unprinted image, returns a focused Print to image mode, or focuses the nearest Print when nothing is focused; the unprinted preview replaces the white card with a transparent ink overlay that attenuates the spectrum underneath; and a new Complex image (grayscale) mode attenuates each frequency/time cell by pixel luminance. Colour images select Complex image automatically and re-fit contrast/brightness from that image (no inheritance, biased darker, pure black always fully cut). Print edits store the grayscale settings (SPT6 record format, ARA state). Verified with SpectrumTagStandalone / SpectrumTag_VST3 / SpectrumTagVerify builds, `--checks` (1.4.8 / right-click / grayscale), `--checks201` / `--checks202` / `--checks1410` / `--checks1412` / `--checks1421` and the standalone `--fileless-ui-test`; no 2.0.2 installers were produced.

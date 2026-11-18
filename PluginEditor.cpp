@@ -885,12 +885,10 @@ public:
         printImageButton.setComponentID("imagePrint");printImageButton.setTypeface(typeface);
         printImageButton.onClick=[this]{if(onImagePrint)onImagePrint();};
         addAndMakeVisible(printImageButton);printImageButton.setVisible(false);
-        if(p.filePlayerMode){
-            imageBox->setWantsKeyboardFocus(true);
-            cancelButton.setComponentID("cancelPrint");
-            cancelButton.onClick=[this]{if(onCancel)onCancel();};
-            addChildComponent(cancelButton);
-        }
+        imageBox->setWantsKeyboardFocus(true);
+        cancelButton.setComponentID("cancelPrint");
+        cancelButton.onClick=[this]{if(onCancel)onCancel();};
+        addChildComponent(cancelButton);
         setPalette(p.getEditorState().palette);
     }
     ~SpectrumView() override { imageBox->removeMouseListener(this); }
@@ -916,7 +914,7 @@ public:
     ImageStage imageStage() const {
         // 状态3 不显示源图，只靠“选中的打印”判定。
         if(selectedPrint())return ImageStage::Focused;
-        if(processor.filePlayerMode&&sourcePrintId.isNotEmpty())return ImageStage::Printed;
+        if(sourcePrintId.isNotEmpty())return ImageStage::Printed;
         if(imageBox->hasImage())return ImageStage::Placing;
         return timelineHasPrints()?ImageStage::Printed:ImageStage::Empty;
     }
@@ -1003,41 +1001,24 @@ public:
         if(imageVisible&&imageBox->hasImage()&&imageBox->isShowing())imageBox->grabKeyboardFocus();
     }
     void contextClick(juce::Point<float> point){
-        if(processor.filePlayerMode){
-            if(renderingPrint)return;
-            // A visible source always hides, regardless of where the right-click lands.
-            juce::String hit;
-            if(!imageVisible){
-                if(preview&&preview->id==selected&&editBounds(*preview).contains(point))hit=selected;
-                else if(const auto edits=processor.recording().edits())
-                    for(auto i=edits->rbegin();i!=edits->rend();++i)
-                        if(editBounds(*i).contains(point)){hit=i->id;break;}
-                if(hit.isNotEmpty()&&hit!=selected&&onSelected)onSelected(hit);
-            }
-            if(onToggleImage)onToggleImage(hit.isEmpty());
-            return;
+        if(renderingPrint)return;
+        // A visible source always hides, regardless of where the right-click lands.
+        juce::String hit;
+        if(!imageVisible){
+            if(preview&&preview->id==selected&&editBounds(*preview).contains(point))hit=selected;
+            else if(const auto edits=processor.recording().edits())
+                for(auto i=edits->rbegin();i!=edits->rend();++i)
+                    if(editBounds(*i).contains(point)){hit=i->id;break;}
+            if(hit.isNotEmpty()&&hit!=selected&&onSelected)onSelected(hit);
         }
-        // 打印交给 onPrintClicked 处理：没有真实音频时它会高亮“先加载音频”。
-        if(imageStage()==ImageStage::Placing){if(onImagePrint)onImagePrint();return;}
-        if(selectedPrint()){if(onContextRevert)onContextRevert();return;}
-        if(!recorded||recorded->empty())return;
-        juce::String nearest;float nearestDistance=std::numeric_limits<float>::max();
-        if(const auto edits=processor.recording().edits())for(const auto& e:*edits){
-            const auto editArea=editBounds(e);
-            const float dx=juce::jmax(0.f,juce::jmax(editArea.getX()-point.x,point.x-editArea.getRight()));
-            const float dy=juce::jmax(0.f,juce::jmax(editArea.getY()-point.y,point.y-editArea.getBottom()));
-            const float distance=dx*dx+dy*dy;
-            if(distance<nearestDistance){nearestDistance=distance;nearest=e.id;}
-        }
-        if(nearest.isNotEmpty()&&onSelected)onSelected(nearest);
+        if(onToggleImage)onToggleImage(hit.isEmpty());
+        return;
     }
     // 状态切换后立刻刷新画布，而不是等下一次 tick。
     void refreshCanvas(){refreshCanvasState();}
     // Called when Print is refused because no real audio is loaded. Emphasise
     // the on-canvas guidance instead of silently doing nothing.
     void flashAudioHint(){audioHintFlashUntil=juce::Time::getMillisecondCounter()+2200;repaint(audioBannerBounds());}
-    // 退回未打印态：这次打印马上由图片接替，绘制时只挖它自己那条频带。
-    void markPrintRevealed(const juce::String& id){imageRevealId=id;}
     void refreshDeletedPrint(){
         // An in-flight raster may still refer to the deleted edit. Retire that
         // request now; paint masks the obsolete footprint until the new audio
@@ -1048,7 +1029,7 @@ public:
         rasterEpoch=renderer.invalidate();requestedRaster=appliedRaster=0;
         waterfall={};waterfallSource.reset();deletionRepair={};repairDesired.reset();waterfallStart=waterfallEnd=0;overviewImage={};overviewSource.reset();
         printBackgrounds.clear();
-        preview.reset();previewImage={};selected={};dragEdit.reset();movingPrint=false;imageRevealId={};sourcePrintId={};stagedPlacement.reset();
+        preview.reset();previewImage={};selected={};dragEdit.reset();movingPrint=false;sourcePrintId={};stagedPlacement.reset();
         panActive=false;fitAfterCapture=false;recorded.reset();recordMode=processor.recording().isEnabled();
         lastClearSerial=processor.getSpectrumClearSerial();view.reset(now());fit=false;
         getProperties().set("previewActive",false);resized();dirty=true;repaint();
@@ -1068,17 +1049,15 @@ public:
         fit=false;panActive=false;updateImageBounds();dirty=true;repaint();
     }
     std::function<void(const juce::String&)> onSelected;
-    std::function<void()> onDelete,onNavigation,onMoveBegin,onRequestAudio,onImagePrint,onRevertFocused,onRevertEnd,onContextRevert;
+    std::function<void()> onDelete,onNavigation,onMoveBegin,onRequestAudio,onImagePrint;
     std::function<void(float)> onWheelSpeed;
     std::function<void(const spectrumtag::PrintEdit&)> onMoveEnd;
     void setPrintButtonTooltip(const juce::String& text){printImageButton.setTooltip(text);}
     void setChinese(bool value){
-        if(processor.filePlayerMode){
-            cancelButton.setButtonText(juce::String::fromUTF8(value?"取消":"Cancel"));
-            cancelButton.setTypeface(value?spectrumtag::ui::chineseTypeface():typeface);
-            cancelButton.setTypeScale(value?spectrumtag::ui::chineseScale:1.0f);
-            cancelButton.setTooltip(juce::String::fromUTF8(value?"取消本次打印，保留上一次的声音。":"Cancel this Print and keep the previous audio."));
-        }
+        cancelButton.setButtonText(juce::String::fromUTF8(value?"取消":"Cancel"));
+        cancelButton.setTypeface(value?spectrumtag::ui::chineseTypeface():typeface);
+        cancelButton.setTypeScale(value?spectrumtag::ui::chineseScale:1.0f);
+        cancelButton.setTooltip(juce::String::fromUTF8(value?"取消本次打印，保留上一次的声音。":"Cancel this Print and keep the previous audio."));
         chinese=value;imageBox->setChinese(value);printImageButton.setButtonText(juce::String::fromUTF8(value?"打印":"Print"));printImageButton.setTypeface(value?spectrumtag::ui::chineseTypeface():typeface);printImageButton.setTypeScale(value?spectrumtag::ui::chineseScale:1.0f);fitButton.setTooltip(juce::String::fromUTF8(processor.isLoadMode()?(value?"全览：显示已加载音频事件的完整范围。":"Fit the complete range of loaded audio events."):(value?"全览：显示整个录音范围。未录音时返回实时视图。":"Fit the recorded range. Before recording, return to the live view.")));repaint();}
     void setPreview(std::optional<spectrumtag::PrintEdit> value,bool released=false,bool anchor=false){
         const bool rebuild=!preview||!value||!spectrumtag::sameEdit(*preview,*value);
@@ -1086,7 +1065,7 @@ public:
         if(preview&&anchor){view.zoomX=preview->viewZoom;view.follow=false;fit=false;view.endTime=preview->start+(1.-(double)imageBox->getX()/juce::jmax(1,contentBounds.getWidth()))*timeSpan();}
         if(rebuild)previewImage={};
         getProperties().set("previewActive",preview.has_value());refreshCanvasState();
-        if(anchor||!processor.filePlayerMode)dirty=true;
+        if(anchor)dirty=true;
         repaint();
     }
     juce::Image currentPreviewImage(){ensurePreviewImage();return previewImage;}
@@ -1137,7 +1116,6 @@ public:
         alignImageToPrint(e);
     }
     void alignImageToPrint(const spectrumtag::PrintEdit& e){
-        if(!processor.filePlayerMode)dirty=true;
         const auto b=editBounds(e).translated(-(float)contentBounds.getX(),-(float)contentBounds.getY());
         imageBox->setPrintBounds({b.getX()/contentBounds.getWidth(),b.getY()/contentBounds.getHeight(),b.getWidth()/contentBounds.getWidth(),b.getHeight()/contentBounds.getHeight()});
     }
@@ -1235,7 +1213,6 @@ public:
             waterfallTop=result->top;waterfallScale=result->scale;waterfallPalette=result->palette;
             if(result->source&&resumePlot.isValid())showResumePlot({});
             waterfall=result->image;waterfallSource=result->source;waterfallStart=result->start;waterfallEnd=result->end;appliedRaster=result->generation;
-            imageRevealId={};  // 新栅格已不再含这次打印，不再需要为它保留旧频谱
             getProperties().set("rasterRevision",result->source?result->source->revision:-1);
             getProperties().set("rasterApplied",(juce::int64)appliedRaster);getProperties().set("rasterMs",result->milliseconds);
             repaint();
@@ -1245,7 +1222,7 @@ public:
         // later ticks even when there is no new raster to adopt.
         if(preview&&previewReleased&&waterfall.isValid()&&waterfallSource==recorded&&recorded&&!processor.recording().isBusy())
             for(const auto& e:recorded->edits)if(SPECTRUMTAG_ARA?(e.id==preview->id&&e.amount==preview->amount&&e.imageMode==preview->imageMode&&e.ratio==preview->ratio&&e.invert==preview->invert&&e.compensation==preview->compensation&&e.fillVersion==preview->fillVersion&&e.speed==preview->speed&&e.scaleMode==preview->scaleMode&&e.displayTop==preview->displayTop&&std::abs(e.start-preview->start)<1.e-6&&std::abs(e.duration-preview->duration)<1.e-6):spectrumtag::sameAudioEdit(e,*preview)){setPreview({});break;}
-        if(const auto selection=selectedPrint();processor.filePlayerMode&&imageVisible&&!movingPrint&&imageBox->hasImage()&&selection&&!imageBox->isMouseButtonDown()){
+        if(const auto selection=selectedPrint();imageVisible&&!movingPrint&&imageBox->hasImage()&&selection&&!imageBox->isMouseButtonDown()){
             const auto& edit=stagedPlacement?*stagedPlacement:*selection;
             const auto expected=editBounds(edit).translated(-(float)contentBounds.getX(),-(float)contentBounds.getY()).toNearestInt();
             if(imageBox->getBounds()!=expected)alignImageToPrint(edit);
@@ -1334,7 +1311,7 @@ public:
             ?juce::MouseCursor::BottomRightCornerResizeCursor:juce::MouseCursor::NormalCursor);
     }
     void mouseDown(const juce::MouseEvent& event) override {
-        panActive=false;dragEdit.reset();movingPrint=false;resizingPrint=false;overviewHandle=OverviewHandle::None;draggingImage=false;revertGesture=false;
+        panActive=false;dragEdit.reset();movingPrint=false;resizingPrint=false;overviewHandle=OverviewHandle::None;
         const auto point=event.getEventRelativeTo(this).position;
         // 右键：打印 / 退回图片 / 聚焦最近的打印；图片框上的右键由本视图
         // 作为 MouseListener 收到（ImageBoxComponent 自己不处理右键）。
@@ -1359,7 +1336,7 @@ public:
             return;
         }
         if(event.eventComponent==imageBox.get())return;
-        if(processor.filePlayerMode&&!contentBounds.toFloat().contains(point)){
+        if(!contentBounds.toFloat().contains(point)){
             if(onDismissDraft)onDismissDraft();
             return;
         }
@@ -1391,29 +1368,9 @@ public:
             else overviewResizeTo(x);
             return;
         }
-        if(draggingImage){
-            if(!event.mods.isLeftButtonDown())return;
-            imageBox->continueExternalDrag(imageBoxPoint(event.getEventRelativeTo(this).position));
-            return;
-        }
         if(!dragEdit||!event.mods.isLeftButtonDown()||!recorded)return;
         const auto delta=event.getEventRelativeTo(this).position-dragPoint;
         if(!movingPrint&&delta.getDistanceFromOrigin()<3.f)return;
-        // 已打印对象被直接拖动（状态2/状态3）：这一手势立即退回未打印态，
-        // 图片按打印范围摆回，并把剩下的位移继续交给图片框，用户不必再点一次。
-        if(!processor.filePlayerMode&&!movingPrint&&dragEdit->id==selected&&onRevertFocused){
-            const auto point=event.getEventRelativeTo(this).position;
-            const bool resize=resizingPrint;
-            revertGesture=true;
-            onRevertFocused();
-            dragEdit.reset();resizingPrint=false;
-            if(imageBox->hasImage()&&imageBox->isVisible()){
-                draggingImage=true;
-                imageBox->beginExternalDrag(imageBoxPoint(dragPoint),resize);
-                imageBox->continueExternalDrag(imageBoxPoint(point));
-            }
-            return;
-        }
         if(!movingPrint){
             if(onMoveBegin)onMoveBegin();movingPrint=true;
             // Build the lightweight image once; geometry gestures stretch this
@@ -1440,25 +1397,16 @@ public:
         e.high=frequency((top-contentBounds.getY())/contentBounds.getHeight(),topHz())/nyquist;
         e.low=frequency((top+height-contentBounds.getY())/contentBounds.getHeight(),topHz())/nyquist;
         }
-        preview=e;previewReleased=false;if(processor.filePlayerMode)previewImage={};
+        preview=e;previewReleased=false;previewImage={};
         getProperties().set("previewActive",true);repaint();
     }
     void mouseUp(const juce::MouseEvent&) override {
-        if(draggingImage){
-            // 退回未打印态的这次手势结束：图片框收尾，编辑器提交同一个撤销步。
-            draggingImage=false;imageBox->endExternalDrag();
-        }else if(revertGesture&&onRevertEnd){
-            // 图片缺失等没能接着拖动的情况：同样要结束这次撤销步。
-            onRevertEnd();
-        }
-        revertGesture=false;
         if(movingPrint&&preview&&onMoveEnd){
             auto e=*preview;
-            if(resizingPrint&&!processor.filePlayerMode)e.cols=juce::jlimit(4,4096,juce::roundToInt(editBounds(e).getWidth()));
             onMoveEnd(e);
         }
         overviewHandle=OverviewHandle::None;
-        dragEdit.reset();movingPrint=false;resizingPrint=false;draggingImage=false;
+        dragEdit.reset();movingPrint=false;resizingPrint=false;
     }
     void paintOverChildren(juce::Graphics& g) override {
         if(preview&&previewReleased&&imageBox->isVisible())paintPrintProgress(g,editBounds(*preview));
@@ -1487,24 +1435,7 @@ public:
         if(waterfall.isValid()){
             juce::Graphics::ScopedSaveState clipped(g);g.reduceClipRegion(contentBounds);
             const auto desired=processor.recording().edits();
-            const auto imageArea=imageBox->isVisible()&&imageBox->hasImage()
-                ?imageBox->getBounds().translated(contentBounds.getX(),contentBounds.getY()).expanded(2)
-                :juce::Rectangle<int>();
-            if(!processor.filePlayerMode&&waterfallSource&&desired)for(const auto& e:waterfallSource->edits)
-                if(std::none_of(desired->begin(),desired->end(),[&](const auto& current){return current.id==e.id;})){
-                    const float padding=(float)(e.fftSize/waterfallSource->sampleRate/timeSpan()*contentBounds.getWidth());
-                    // FFT window leakage can reach beyond the image's band.
-                    // Hide the obsolete time slice, including that leakage.
-                    const auto obsolete=editBounds(e).expanded(padding+2,0);
-                    // 已打印对象退回未打印态时，这块位置马上由图片本身接替（或者
-                    // 图片正在原位盖着它）。这时只挖掉它自己那条频带：把整列都挖空
-                    // 会让图片上下的频谱在新栅格到达之前闪黑一下。
-                    const bool bandOnly=e.id==imageRevealId
-                        ||(imageArea.getWidth()>0&&imageArea.contains(editBounds(e).getSmallestIntegerContainer()));
-                    g.excludeClipRegion(bandOnly?obsolete.getSmallestIntegerContainer()
-                        :juce::Rectangle<float>(obsolete.getX(),(float)contentBounds.getY(),obsolete.getWidth(),(float)contentBounds.getHeight()).getSmallestIntegerContainer());
-                }
-            const auto& visibleRaster=processor.filePlayerMode?rasterWithoutEditedPrint(desired):waterfall;
+            const auto& visibleRaster=rasterWithoutEditedPrint(desired);
             if(waterfallEnd>waterfallStart)g.drawImage(visibleRaster,juce::Rectangle<float>(timeX(waterfallStart),(float)contentBounds.getY(),timeX(waterfallEnd)-timeX(waterfallStart),(float)contentBounds.getHeight()),juce::RectanglePlacement::stretchToFit);
             else g.drawImageAt(visibleRaster,contentBounds.getX(),contentBounds.getY());
         }
@@ -1512,7 +1443,7 @@ public:
             juce::Graphics::ScopedSaveState clipped(g);g.reduceClipRegion(contentBounds);
             if(preview){
                 const auto bounds=editBounds(*preview);
-                if(!processor.filePlayerMode||!imageBox->isVisible()){
+                if(!imageBox->isVisible()){
                     ensurePreviewImage();
                     g.drawImage(previewImage,bounds,juce::RectanglePlacement::stretchToFit);
                 }
@@ -1571,12 +1502,8 @@ public:
         }
         g.setColour(kBgColour);g.fillRect(statusBounds);g.setColour(kTextSub);g.setFont(chinese?spectrumtag::ui::chineseFont(11.0f):juce::Font(11.0f));
         const double span=baseSpan()/view.zoomX;
-        // 右键的提示跟随三态：能打印时提示打印，聚焦时提示退回，其余提示聚焦。
-        const auto stage=imageStage();
-        const auto rightHint=juce::String::fromUTF8(processor.filePlayerMode?(chinese?"右键显示 / 隐藏图片":"Right-click: show / hide image"):stage==ImageStage::Placing?(chinese?"右键打印":"Right-click: print")
-            :stage==ImageStage::Focused?(chinese?"右键退回图片":"Right-click: back to image")
-            :(chinese?"右键聚焦最近的打印":"Right-click: focus nearest print"));
-        const auto label=(SPECTRUMTAG_ARA?juce::String::fromUTF8(chinese?"ARA 已加载  ":"ARA Loaded  "):processor.filePlayerMode?juce::String::fromUTF8(chinese?"已加载  ":"Loaded  "):recordMode?juce::String::fromUTF8(processor.recording().isArmed()?(chinese?"录音中  ":"Recording  "):(chinese?"已录制  ":"Recorded  ")):juce::String::fromUTF8(view.follow?(chinese?"实时  ":"Live  "):(chinese?"历史  ":"History  ")))+juce::String(view.endTime-span,1)+" - "+juce::String(view.endTime,1)+" s  |  "+rightHint+(preview?juce::String::fromUTF8(previewReleased?(chinese?"  |  模拟预览 — 正在渲染…":"  |  Preview — rendering…"):((processor.filePlayerMode||stagedPlacement||movingPrint)?(chinese?"  |  点击打印以应用预览":"  |  Click Print to apply preview"):(chinese?"  |  模拟预览 — 松手后渲染":"  |  Preview — render on release"))):juce::String())+(processor.recording().isBusy()?juce::String::fromUTF8(chinese?"  |  正在渲染…":"  |  Rendering…"):juce::String());
+        const auto rightHint=juce::String::fromUTF8(chinese?"右键显示 / 隐藏图片":"Right-click: show / hide image");
+        const auto label=(SPECTRUMTAG_ARA?juce::String::fromUTF8(chinese?"ARA 已加载  ":"ARA Loaded  "):processor.filePlayerMode?juce::String::fromUTF8(chinese?"已加载  ":"Loaded  "):recordMode?juce::String::fromUTF8(processor.recording().isArmed()?(chinese?"录音中  ":"Recording  "):(chinese?"已录制  ":"Recorded  ")):juce::String::fromUTF8(view.follow?(chinese?"实时  ":"Live  "):(chinese?"历史  ":"History  ")))+juce::String(view.endTime-span,1)+" - "+juce::String(view.endTime,1)+" s  |  "+rightHint+(preview?juce::String::fromUTF8(previewReleased?(chinese?"  |  模拟预览 — 正在渲染…":"  |  Preview — rendering…"):(chinese?"  |  点击打印以应用预览":"  |  Click Print to apply preview")):juce::String())+(processor.recording().isBusy()?juce::String::fromUTF8(chinese?"  |  正在渲染…":"  |  Rendering…"):juce::String());
         const char* errors[]={"","Recording stopped: capture queue full","Recording stopped: 15 min / 64 M sample limit","Recording stopped: sample rate / channel layout changed","Recording cache could not be saved or loaded","Audio import failed / exceeds 15 min or 64 M samples"};
 #if SPECTRUMTAG_ARA
         if(auto status=processor.araStatus();status.isNotEmpty()){
@@ -1597,18 +1524,11 @@ private:
     void refreshCanvasState(){
         // 清空进行中（音频即将消失）时什么都不显示，避免引导框闪一下。
         const bool audio=!processor.isClearPending();
-        // 没有音频就没有图片对象：只在“音频曾经可用、随后被清空”时销毁旧图，
-        // 避免启动时音频还没加载完就把刚恢复的图片清掉。
-        if(audio)audioAvailableSeen=true;
-        else if(!processor.filePlayerMode&&audioAvailableSeen&&imageBox->hasImage()){imageBox->clearImage();if(selected.isNotEmpty()){selected={};}}
         const auto stage=imageStage();
-        // 聚焦态只画打印范围和 Delete 提示（由 SpectrumView 绘制），不再显示图片框。
-        const bool showBox=audio&&(processor.filePlayerMode
-            ?imageVisible
-            :(stage==ImageStage::Empty||stage==ImageStage::Placing));
+        const bool showBox=audio&&imageVisible;
         imageBox->setVisible(showBox);
         const bool canPrintDraft=showBox&&stage==ImageStage::Placing;
-        const bool editingPrint=processor.filePlayerMode&&preview&&!previewReleased&&preview->id==selected;
+        const bool editingPrint=preview&&!previewReleased&&preview->id==selected;
         printImageButton.setVisible(!renderingPrint&&(canPrintDraft||stagedPlacement.has_value()||editingPrint)&&!movingPrint&&!processor.isPrintRunning());
         cancelButton.setVisible(renderingPrint.has_value());
         if(printImageButton.isVisible()||cancelButton.isVisible())layoutPrintImageButton();
@@ -1713,7 +1633,7 @@ private:
                                                                    :juce::jmax(viewStart,totalStart);
         double span=overviewHandle==OverviewHandle::ResizeLeft?fixed-pointerTime:pointerTime-fixed;
         const double plotWidth=juce::jmax(1,contentBounds.getWidth());
-        if(processor.filePlayerMode&&selectedPrint()){
+        if(selectedPrint()){
             // Dragging the overview is a view gesture. Preserve even the Speed
             // control value of the selected Print, as well as its saved edit.
             const double minSpan=juce::jmin(.05,totalSpan);
@@ -1877,13 +1797,10 @@ private:
     std::shared_ptr<const spectrumtag::RecordingSnapshot> recorded;
     std::shared_ptr<const std::vector<spectrumtag::PrintEdit>> observedEdits;
     juce::String selected;
-    juce::String imageRevealId;  // 正被图片接替的打印：绘制时只挖它的频带
     std::optional<spectrumtag::PrintEdit> preview,dragEdit;bool previewReleased=false,movingPrint=false,resizingPrint=false;
-    bool draggingImage=false;   // 已退回未打印态的图片正跟随当前拖动
-    bool revertGesture=false;   // 本次手势由“撤掉打印”开启，松手时必须收尾
     juce::Image previewImage;juce::Point<float> dragPoint;juce::Rectangle<float> dragBounds;
     bool recordMode=false,chinese=true,fit=false,restored=false,wasPlaying=false,wasArmed=false,fitAfterCapture=false;
-    bool lastHasImage=false,lastAudioLoaded=false,audioAvailableSeen=false;
+    bool lastHasImage=false,lastAudioLoaded=false;
     juce::uint32 audioHintFlashUntil=0;
     OverviewHandle overviewHandle=OverviewHandle::None;
     float lastTop=0;
@@ -1952,13 +1869,11 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
     titleLabel.setText (SPECTRUMTAG_ARA?"SpectrumTag ARA":"SpectrumTag", juce::dontSendNotification);
     styleHeaderLabel (titleLabel, SPECTRUMTAG_ARA?25.0f:32.0f, kTextWhite);
     addAndMakeVisible (titleLabel);
-    if(processor.filePlayerMode){
-        editionLabel.setText(juce::String::fromUTF8("(子青版)"),juce::dontSendNotification);
-        editionLabel.setComponentID("editionLabel");
-        editionLabel.setColour(juce::Label::textColourId,kTextWhite);
-        editionLabel.setFont(spectrumtag::ui::chineseFont(22.f));
-        addAndMakeVisible(editionLabel);
-    }
+    editionLabel.setText(juce::String::fromUTF8("(子青版)"),juce::dontSendNotification);
+    editionLabel.setComponentID("editionLabel");
+    editionLabel.setColour(juce::Label::textColourId,kTextWhite);
+    editionLabel.setFont(spectrumtag::ui::chineseFont(22.f));
+    addAndMakeVisible(editionLabel);
 
     versionLabel.setText (juce::String ("v") + (processor.filePlayerMode&&processor.filePlayerVersion.isNotEmpty()?processor.filePlayerVersion:juce::String(JucePlugin_VersionString)), juce::dontSendNotification);
     styleHeaderLabel (versionLabel, 18.0f, kTextWhite);
@@ -1974,9 +1889,9 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
     spectrumView = std::make_unique<SpectrumView> (processor, basementTypeface);
     addAndMakeVisible (*spectrumView);
 
-    spectrumView->getImageBox().setLivePreviewMode(processor.filePlayerMode);
+    spectrumView->getImageBox().setLivePreviewMode(true);
     spectrumView->onCancel=[this]{finishStandalonePrint(true);};
-    if(processor.filePlayerMode)spectrumView->onDismissDraft=[this]{
+    spectrumView->onDismissDraft=[this]{
         if(pendingSelected||spectrumView->stagedPlacement||standaloneCopyOrigin.isNotEmpty())selectPrinted({});
     };
     spectrumView->onToggleImage=[this](bool centre){toggleStandaloneImage(centre);};
@@ -1984,7 +1899,7 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
     spectrumView->getImageBox().onChanged = [this] {
         // 拖动只改位置/大小；聚焦对象是否退回未打印态由松手（onGestureEnd）决定。
         if(!suppressChanges){
-            if(processor.filePlayerMode&&gestureActive){
+            if(gestureActive){
                 if(spectrumView->getImageBox().isMovingSource()&&spectrumView->sourcePrintId.isNotEmpty()){
                     // The revealed source becomes a new placement on its first movement.
                     // Deselect before dropping a draft so the box stays under the pointer.
@@ -2009,14 +1924,9 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
     spectrumView->getImageBox().onGestureStart=[this]{
         beginChange();gestureActive=true;
     };
-    // Ctrl+拖动：原对象留在原位打印，副本继续被这次拖动带走。
-    spectrumView->getImageBox().onDuplicateDrag=[this]{duplicateImageObject();};
     spectrumView->getImageBox().onGestureEnd=[this]{
         gestureActive=false;
-        if(processor.filePlayerMode)showImageArtwork();
-        // 聚焦态下拖动/缩放图片属于“需要重新渲染”的修改：撤掉已打印的图案，
-        // 对象退回未打印态，图片停在新位置等待重新打印。
-        if(!processor.filePlayerMode&&spectrumView->selectedPrint())unprintFocused();
+        showImageArtwork();
         finishChange(true);
     };
     spectrumView->getImageBox().onFileLoadStart=[this]{beginChange();};
@@ -2024,14 +1934,6 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
     // 未加载音频时，点击画布上的引导条等同按"加载音频 / Load audio"。
     spectrumView->onRequestAudio=[this]{if(!processor.isClearPending())recordButton.onClick();};
     spectrumView->onImagePrint=[this]{onPrintClicked();};
-    // 右键把聚焦的打印退回图片模式（状态3 → 状态1）：撤掉打印、源图按原范围摆回。
-    spectrumView->onContextRevert=[this]{
-        finishChange(true);
-        if(!spectrumView->selectedPrint())return;
-        beginChange();
-        unprintFocused();
-        finishChange(true);
-    };
     spectrumView->onDelete=[this]{removeSelected();};
     spectrumView->onNavigation=[this]{finishChange(true);changed();};
     spectrumView->onWheelSpeed=[this](float value){
@@ -2040,23 +1942,13 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
     };
     spectrumView->onMoveBegin=[this]{
         beginChange();gestureActive=true;
-        if(processor.filePlayerMode)simulateImage=true;
+        simulateImage=true;
     };
-    // 直接拖动已打印对象（状态2/状态3）：撤掉这次打印、图片按打印范围摆回，
-    // 剩下的位移由同一手势继续作用在图片上；松手时整体提交，算一个撤销步。
-    spectrumView->onRevertFocused=[this]{finishChange(true);beginChange();gestureActive=true;unprintFocused();};
-    spectrumView->onRevertEnd=[this]{gestureActive=false;finishChange(true);};
     spectrumView->onMoveEnd=[this](const spectrumtag::PrintEdit& moved){
-        if(processor.filePlayerMode){
-            spectrumView->stagePlacement(moved);
-            spectrumView->imageVisible=false;
-            spectrumView->refreshCanvas();
-            gestureActive=false;changed();finishChange(true);return;
-        }
-        // 聚焦对象被拖动/缩放：撤掉打印、退回未打印态。
-        spectrumView->setPreview({});
-        unprintFocused();
-        finishChange(true);
+        spectrumView->stagePlacement(moved);
+        spectrumView->imageVisible=false;
+        spectrumView->refreshCanvas();
+        gestureActive=false;changed();finishChange(true);return;
     };
     spectrumView->getImageBox().onImageRequested = [this] (const juce::File& file) { imagePicked(file); };
     for(int i=0;i<8;++i){
@@ -2107,12 +1999,9 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
     printButton.setComponentID("printButton");
     printButton.setTypeface (basementTypeface);
     recordButton.setComponentID("recordButton");removePrintButton.setComponentID("removePrint");clearRecordButton.setComponentID("clearRecord");
-    copyImageButton.setComponentID("copyImage");copyImageButton.onClick=[this]{if(copyButtonPaste)pasteImageObject();else copyImageObject();refreshCopyButton();};
-    if(processor.filePlayerMode){
-        imageVisibilityButton.setComponentID("imageVisibility");
-        imageVisibilityButton.onClick=[this]{toggleStandaloneImage();};
-        addAndMakeVisible(imageVisibilityButton);
-    }
+    imageVisibilityButton.setComponentID("imageVisibility");
+    imageVisibilityButton.onClick=[this]{toggleStandaloneImage();};
+    addAndMakeVisible(imageVisibilityButton);
     previousPrintButton.setComponentID("previousPrint");nextPrintButton.setComponentID("nextPrint");
     recordButton.onClick=[this]{
         if(processor.filePlayerMode){finishChange(true);if(processor.onLoadAudioFile)processor.onLoadAudioFile();return;}
@@ -2133,15 +2022,11 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
 #else
         processor.clearRecordedAudio();
 #endif
-        // 清空 = 音频 + 全部图片对象一起清除；源图与缓存的图片引用都不保留。
-        if(!processor.filePlayerMode)spectrumView->getImageBox().clearImage();
         spectrumView->selectEdit({});placementId={};standaloneCopyOrigin={};retainHiddenParameters=false;spectrumView->clearDisplay();spectrumView->refreshCanvas();
-        const juce::String noImage;
-        if(!processor.filePlayerMode)spectrumtag::Preferences::remember(&noImage,nullptr);
         persistEditorStateToProcessor();stableState=processor.captureUserState();
     };
     removePrintButton.onClick=[this]{removeSelected();};previousPrintButton.onClick=[this]{navigatePrint(false);};nextPrintButton.onClick=[this]{navigatePrint(true);};
-    for(auto* b:std::initializer_list<juce::Button*>{&recordButton,&removePrintButton,&copyImageButton,&clearRecordButton,&previousPrintButton,&nextPrintButton})addAndMakeVisible(b);
+    for(auto* b:std::initializer_list<juce::Button*>{&recordButton,&removePrintButton,&clearRecordButton,&previousPrintButton,&nextPrintButton})addAndMakeVisible(b);
     if(processor.isLoadMode()){recordButton.setComponentID("loadButton");clearRecordButton.setComponentID("clearLoad");}
     frequencyRangeLabel.setComponentID("frequencyRangeLabel");fftSizeLabel.setComponentID("fftSizeLabel");frequencyRangeCombo.setComponentID("frequencyRange");frequencyRangeCombo.addItemList({"20 kHz","24 kHz","22.05 kHz","48 kHz"},1);
     addAndMakeVisible(frequencyRangeCombo);addAndMakeVisible(frequencyRangeLabel);
@@ -2168,7 +2053,7 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
     addAndMakeVisible(imageStyleCombo);
     imageStyleCombo.onChange=[this]{
         syncImagePreview();changed(true);
-        if(processor.filePlayerMode&&spectrumView->imageVisible)showImageArtwork();
+        if(spectrumView->imageVisible)showImageArtwork();
     };
     for(auto* slider:{&imageGrayContrastSlider,&imageGrayBrightnessSlider}){
         slider->setSliderStyle(juce::Slider::LinearHorizontal);
@@ -2182,7 +2067,7 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
 
     // ---- APVTS Attachments ----
     auto& vts = processor.getAPVTS();
-    fftSizeAttachment=std::make_unique<juce::ParameterAttachment>(*vts.getParameter(ParameterIDs::fftSize),[this](float value){const int index=juce::jmin(2,(int)value);fftSizeCombo.setSelectedId(index+1,juce::dontSendNotification);if(!processor.filePlayerMode||(!spectrumView->selectedPrint()&&processor.recording().edits()->empty()))processor.recording().setDisplayFft(1024<<index);},nullptr);
+    fftSizeAttachment=std::make_unique<juce::ParameterAttachment>(*vts.getParameter(ParameterIDs::fftSize),[this](float value){const int index=juce::jmin(2,(int)value);fftSizeCombo.setSelectedId(index+1,juce::dontSendNotification);if(!spectrumView->selectedPrint()&&processor.recording().edits()->empty())processor.recording().setDisplayFft(1024<<index);},nullptr);
     fftSizeAttachment->sendInitialUpdate();
     fftSizeCombo.onChange=[this]{fftSizeAttachment->setValueAsCompleteGesture((float)fftSizeCombo.getSelectedItemIndex());changed(true);};
     auto scaleChanged=[this](float){if(!changingScaleControl)syncFrequencyScale();};
@@ -2204,13 +2089,13 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
         slider->onDragStart=[this]{beginChange();gestureActive=true;};
         slider->onDragEnd=[this]{
             gestureActive=false;changedAt=juce::Time::getMillisecondCounter();
-            if(processor.filePlayerMode&&spectrumView->imageVisible)showImageArtwork();
+            if(spectrumView->imageVisible)showImageArtwork();
         };
         slider->onValueChange=[this,slider]{
             if(suppressChanges||processor.isRestoringUserState())return;
-            if(slider==&speedSlider&&wheelChange){changed(!processor.filePlayerMode);return;}
+            if(slider==&speedSlider&&wheelChange){changed(false);return;}
             if(slider==&speedSlider)spectrumView->useAbsoluteSpeed((float)speedSlider.getValue());
-            if(processor.filePlayerMode&&slider==&speedSlider&&spectrumView->selectedPrint())pendingDuration=true;
+            if(slider==&speedSlider&&spectrumView->selectedPrint())pendingDuration=true;
             syncImagePreview();changed(true);
         };
     }
@@ -2224,7 +2109,7 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
         if(mode==spectrumtag::frequency::insight){
             // An explicit preset choice calibrates timing. Host automation and
             // selecting an existing Print only recall their stored settings.
-            if(processor.filePlayerMode&&spectrumView->selectedPrint())pendingPresetTiming=true;
+            if(spectrumView->selectedPrint())pendingPresetTiming=true;
             const bool previous=suppressChanges;suppressChanges=true;
             auto setValue=[this](const juce::String& id,float value){auto* p=processor.getAPVTS().getParameter(id);p->beginChangeGesture();p->setValueNotifyingHost(p->convertTo0to1(value));p->endChangeGesture();};
             setValue(ParameterIDs::speed,(float)spectrumtag::timing::presetSpeed(mode,spectrumView->getContentBounds().getHeight()));
@@ -2235,7 +2120,7 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
         changingScaleControl=false;syncFrequencyScale();processor.rememberARAFrequencyChoice();
     };
     frequencyRangeCombo.onChange=[this]{
-        if(processor.filePlayerMode&&!suppressChanges&&spectrumView->selectedPrint())pendingFrequency=true;
+        if(!suppressChanges&&spectrumView->selectedPrint())pendingFrequency=true;
         changed(true);
     };
     spectrumView->setScaleMode((fftScaleCombo.getSelectedId()-1));
@@ -2259,10 +2144,6 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
     std::vector<juce::Component*> controls;for(auto* child:getChildren())controls.push_back(child);
     for(auto* child:controls)scaledContent.addAndMakeVisible(child);
     addAndMakeVisible(scaledContent);scaleReady=true;
-    // 「显示上限」暂时屏蔽显示（addAndMakeVisible 会重新显示子组件，必须放在重挂之后）：
-    // 参数、附件与重渲染逻辑全部保留，默认 22.05 kHz。
-    frequencyRangeCombo.setVisible(processor.filePlayerMode);frequencyRangeLabel.setVisible(processor.filePlayerMode);
-    copyImageButton.setVisible(!processor.filePlayerMode);
 #if SPECTRUMTAG_ARA
     clearRecordButton.setVisible(true);
 #endif
@@ -2303,7 +2184,7 @@ SpectrumTagAudioProcessorEditor::~SpectrumTagAudioProcessorEditor()
 #if SPECTRUMTAG_ARA
     if(auto* view=processor.getEditorView<spectrumtag::ara::View>())view->beforeSelection={};
 #endif
-    finishChange(true);persistEditorStateToProcessor();
+    finishChange(true);finishPrintOnDetach();persistEditorStateToProcessor();
     if(scaleNeedsSave)spectrumtag::Preferences::remember(nullptr,nullptr,nullptr,&uiScale);
     tooltipWindow.setLookAndFeel(nullptr);tooltipLanguageButton.setLookAndFeel(nullptr);
     telemetrySession.reset();
@@ -2403,27 +2284,23 @@ void SpectrumTagAudioProcessorEditor::resized()
     for(int i=0;i<8;++i)if(paletteButtons[(size_t)i])paletteButtons[(size_t)i]->setBounds(px(125-toolbarOffset+i*35),px(52),px(30),px(30));
     const int recordW=processor.isLoadMode()?104:84;
     const int recordX=459-toolbarOffset;
-    if(processor.filePlayerMode)imageVisibilityButton.setBounds(recordX-46,52,36,28);
+    imageVisibilityButton.setBounds(recordX-46,52,36,28);
     recordButton.setBounds(recordX,52,recordW,28);
     removePrintButton.setBounds(recordX+recordW+8,52,75,28);
-    // 复制/粘贴按钮紧贴删除按钮右侧，导航箭头顺势右移。
-    copyImageButton.setBounds(recordX+recordW+91,52,68,28);
     // 导航箭头只有图标、没有底板，按钮本身收窄到图标宽度附近。
-    previousPrintButton.setBounds(recordX+recordW+(processor.filePlayerMode?91:167),52,36,28);
-    nextPrintButton.setBounds(recordX+recordW+(processor.filePlayerMode?131:207),52,36,28);
+    previousPrintButton.setBounds(recordX+recordW+91,52,36,28);
+    nextPrintButton.setBounds(recordX+recordW+131,52,36,28);
     clearRecordButton.setBounds(canvasWidth-300-46,52,34,28);
     frequencyRangeLabel.setBounds(canvasWidth-300,52,142,28);frequencyRangeCombo.setBounds(canvasWidth-158,52,138,28);
 
     titleLabel.setFont   (juce::Font (basementTypeface).withHeight ((SPECTRUMTAG_ARA?25.0f:32.0f) * scale));
-    if(processor.filePlayerMode){
-        const auto textWidth=[](const juce::Label& label){
-            return juce::roundToInt(std::ceil(juce::GlyphArrangement::getStringWidth(label.getFont(),label.getText())))+label.getBorderSize().getLeftAndRight();
-        };
-        titleLabel.setBounds(header.removeFromLeft(textWidth(titleLabel)));
-        editionLabel.setFont(spectrumtag::ui::chineseFont(22.f*scale));
-        editionLabel.setBorderSize(juce::BorderSize<int>(0));
-        editionLabel.setBounds(header.removeFromLeft(textWidth(editionLabel)));
-    }else titleLabel.setBounds(header.removeFromLeft(px(250)));
+    const auto textWidth=[](const juce::Label& label){
+        return juce::roundToInt(std::ceil(juce::GlyphArrangement::getStringWidth(label.getFont(),label.getText())))+label.getBorderSize().getLeftAndRight();
+    };
+    titleLabel.setBounds(header.removeFromLeft(textWidth(titleLabel)));
+    editionLabel.setFont(spectrumtag::ui::chineseFont(22.f*scale));
+    editionLabel.setBorderSize(juce::BorderSize<int>(0));
+    editionLabel.setBounds(header.removeFromLeft(textWidth(editionLabel)));
     header.removeFromLeft (px (8));
     versionLabel.setBounds (header.removeFromLeft (px (80)));
     header.removeFromLeft (px (4));
@@ -2552,7 +2429,7 @@ void SpectrumTagAudioProcessorEditor::syncFrequencyScale() {
     const int preset=value(ParameterIDs::frequencyPreset);
     const int mode=preset==2?1:preset>0?preset+1:value(ParameterIDs::fftScale);
     fftScaleCombo.setSelectedId(mode+1,juce::dontSendNotification);spectrumView->setScaleMode(mode);
-    if(processor.filePlayerMode&&!suppressChanges&&!processor.isRestoringUserState()&&spectrumView->selectedPrint())pendingFrequency=true;
+    if(!suppressChanges&&!processor.isRestoringUserState()&&spectrumView->selectedPrint())pendingFrequency=true;
     changed(true);
 }
 void SpectrumTagAudioProcessorEditor::syncImagePreview()
@@ -2572,13 +2449,11 @@ void SpectrumTagAudioProcessorEditor::syncImagePreview()
 void SpectrumTagAudioProcessorEditor::updateImageStyleControls()
 {
     const bool complexImage=*processor.getAPVTS().getRawParameterValue(ParameterIDs::imageStyle)>0.5f;
-    const bool editable=!processor.filePlayerMode||(!standalonePrintJob
-        &&(!retainHiddenParameters||spectrumView->imageVisible||spectrumView->selectedEdit().isNotEmpty()));
-    if(processor.filePlayerMode){
-        imageStyleCombo.setEnabled(editable);
-        amplitudeSlider.setEnabled(editable);
-        invertToggle.setEnabled(editable);
-    }
+    const bool editable=!standalonePrintJob
+        &&(!retainHiddenParameters||spectrumView->imageVisible||spectrumView->selectedEdit().isNotEmpty());
+    imageStyleCombo.setEnabled(editable);
+    amplitudeSlider.setEnabled(editable);
+    invertToggle.setEnabled(editable);
     auto show=[&](juce::Component& control,bool visible){
         control.setEnabled(visible&&editable);control.setAlpha(1.0f);
         if(control.isVisible()==visible)return false;
@@ -2644,19 +2519,19 @@ void SpectrumTagAudioProcessorEditor::timerCallback()
 #if SPECTRUMTAG_ARA
     syncHostLayout();
     if(auto* view=processor.getEditorView<spectrumtag::ara::View>()){
-        view->beforeSelection=[this]{finishChange(true);};
+        view->beforeSelection=[this]{finishChange(true);finishPrintOnDetach();};
         if(!view->loaded&&!view->manualLoadOnly)processor.loadARA();
     }
     processor.pollARA();
 #endif
     processor.pollTransportTimeout();
     if(standalonePrintJob)finishStandalonePrint(false);
-    if(processor.getStateRevision()!=lastStateRevision){pendingChange=pendingRevert=false;restoreEditorStateFromProcessor();stableState=processor.captureUserState();}
+    if(processor.getStateRevision()!=lastStateRevision){pendingChange=false;restoreEditorStateFromProcessor();stableState=processor.captureUserState();}
     syncImagePreview();
     auto& sourceBox=spectrumView->getImageBox();
     if(sourceBox.refreshConversion()){
         standalonePreviewDirty=true;
-        if(processor.filePlayerMode&&spectrumView->stagedPlacement&&!pendingSelected){
+        if(spectrumView->stagedPlacement&&!pendingSelected){
             auto draft=*spectrumView->stagedPlacement;
             if(const auto audio=processor.recording().snapshot()){
                 const auto nyquist=(float)audio->sampleRate*.5f;
@@ -2691,23 +2566,14 @@ void SpectrumTagAudioProcessorEditor::timerCallback()
     processor.flushPrintMathLogToFile();
     recordButton.setButtonText(juce::String::fromUTF8(processor.isLoadMode()?(chineseTips?"加载音频":"Load audio"):processor.recording().isArmed()?(chineseTips?"停止录音":"Stop Rec"):(chineseTips?"录音":"Record")));
     recordButton.setColour(juce::TextButton::buttonColourId,processor.recording().isArmed()?juce::Colour(0xff983e56):kButtonBg);
-    // 图片对象存在（未打印或聚焦）即可删除；清空按钮同时清除音频与全部图片。
-    const bool objectSelected=spectrumView->getImageBox().hasImage()||spectrumView->selectedPrint().has_value();
-    removePrintButton.setEnabled(!standalonePrintJob&&(processor.filePlayerMode?spectrumView->selectedPrint().has_value():objectSelected));
-    if(processor.filePlayerMode)imageVisibilityButton.setToggleState(spectrumView->imageVisible,juce::dontSendNotification);
-    // 复制按钮与删除按钮同样只在有对象时亮起；已经复制、等待粘贴时保持可用，
-    // 否则复制后一旦取消聚焦就按不到粘贴。
-    copyImageButton.setEnabled(objectSelected||(copyButtonPaste&&clipboardImagePath.isNotEmpty()));
+    removePrintButton.setEnabled(!standalonePrintJob&&spectrumView->selectedPrint().has_value());
+    imageVisibilityButton.setToggleState(spectrumView->imageVisible,juce::dontSendNotification);
     clearRecordButton.setEnabled(!standalonePrintJob&&processor.recording().isEnabled()&&!processor.isClearPending());recordButton.setEnabled(!standalonePrintJob&&!processor.isClearPending());
-    // 只有频谱里存在多个打印时才需要导航，单个对象时把两个箭头藏起来。
-    const auto printCount=processor.recording().edits()?processor.recording().edits()->size():0;
-    const bool multiplePrints=processor.filePlayerMode||printCount>1;
-    previousPrintButton.setVisible(multiplePrints);nextPrintButton.setVisible(multiplePrints);
     previousPrintButton.setEnabled(!standalonePrintJob&&!processor.isClearPending()&&adjacentPrint(false).isNotEmpty());nextPrintButton.setEnabled(!standalonePrintJob&&!processor.isClearPending()&&adjacentPrint(true).isNotEmpty());
 #if SPECTRUMTAG_ARA
-    recordButton.setEnabled(processor.araBound());clearRecordButton.setEnabled(processor.araBound()&&processor.getEditorView<spectrumtag::ara::View>()->loaded);
+    recordButton.setEnabled(!standalonePrintJob&&processor.araBound());clearRecordButton.setEnabled(!standalonePrintJob&&processor.araBound()&&processor.getEditorView<spectrumtag::ara::View>()->loaded);
 #endif
-    auto recording=processor.recording().snapshot();noiseFillSlider.setEnabled(!standalonePrintJob&&(!processor.filePlayerMode||imageStyleCombo.isEnabled())&&processor.recording().isEnabled()&&recording&&!recording->empty());noiseFillLabel.setAlpha(noiseFillSlider.isEnabled()?1.f:.4f);
+    auto recording=processor.recording().snapshot();noiseFillSlider.setEnabled(!standalonePrintJob&&imageStyleCombo.isEnabled()&&processor.recording().isEnabled()&&recording&&!recording->empty());noiseFillLabel.setAlpha(noiseFillSlider.isEnabled()?1.f:.4f);
     if(!pendingChange&&!gestureActive){persistEditorStateToProcessor();stableState=processor.captureUserState();}
 }
 
@@ -2761,17 +2627,9 @@ void SpectrumTagAudioProcessorEditor::beginChange(){
 void SpectrumTagAudioProcessorEditor::changed(bool parameters){
     if(suppressChanges||processor.isRestoringUserState())return;
     if(!pendingChange){changeBefore=stableState;pendingChange=true;}
-    // 聚焦态下任何影响渲染的修改（参数、速度、频率刻度…）都会让已打印图案失效：
-    // 手势结束后撤掉打印，对象退回未打印态。
     standalonePreviewDirty=true;
-    if(processor.filePlayerMode&&parameters)simulateImage=spectrumView->imageVisible;
-    if(parameters&&spectrumView->selectedPrint()){
-        if(processor.filePlayerMode){
-            pendingSelected=true;
-
-        }
-        else pendingRevert=true;
-    }
+    if(parameters)simulateImage=spectrumView->imageVisible;
+    if(parameters&&spectrumView->selectedPrint())pendingSelected=true;
     changedAt=juce::Time::getMillisecondCounter();
     persistEditorStateToProcessor();
 }
@@ -2779,8 +2637,7 @@ void SpectrumTagAudioProcessorEditor::finishChange(bool force){
     if(suppressChanges||!pendingChange)return;
     if(!force&&(gestureActive||juce::Time::getMillisecondCounter()-changedAt<180||!spectrumView->getImageBox().conversionReady()))return;
     if(pendingSelected)finishSelectedPreview();
-    if(processor.filePlayerMode&&spectrumView->imageVisible&&simulateImage)showImageArtwork();
-    if(pendingRevert){pendingRevert=false;unprintFocused();}
+    if(spectrumView->imageVisible&&simulateImage)showImageArtwork();
     persistEditorStateToProcessor();auto after=processor.captureUserState();
     processor.commitUserChange(std::move(changeBefore),after);stableState=std::move(after);pendingChange=pendingSelected=pendingDuration=pendingFrequency=pendingPresetTiming=false;
 }
@@ -2793,51 +2650,17 @@ void SpectrumTagAudioProcessorEditor::undo(bool redo){
 bool SpectrumTagAudioProcessorEditor::keyPressed(const juce::KeyPress& key){
     const auto mods=key.getModifiers();
     if(mods.isCtrlDown()&&(key.getKeyCode()=='z'||key.getKeyCode()=='Z')){undo(mods.isShiftDown());return true;}
-    if(!processor.filePlayerMode&&mods.isCtrlDown()&&(key.getKeyCode()=='c'||key.getKeyCode()=='C')){copyImageObject();return true;}
-    if(!processor.filePlayerMode&&mods.isCtrlDown()&&(key.getKeyCode()=='v'||key.getKeyCode()=='V')){pasteImageObject();return true;}
     if(key.getKeyCode()==juce::KeyPress::deleteKey&&(spectrumView->selectedPrint()||spectrumView->getImageBox().hasImage())){removeSelected();return true;}return false;
 }
 bool SpectrumTagAudioProcessorEditor::audioReady() const {
     return spectrumView!=nullptr&&!processor.isClearPending();
-}
-// 把“未打印”对象渲染进频谱；成功后源图销毁，对象只剩频谱里的挖空（已打印态）。
-bool SpectrumTagAudioProcessorEditor::printPlacingObject(){
-    if(processor.filePlayerMode||!spectrumView||spectrumView->imageStage()!=SpectrumView::ImageStage::Placing||!spectrumView->getImageBox().hasImage())return false;
-    if(!processor.recording().isEnabled())return false;
-    auto source=processor.recording().snapshot();if(!source||source->empty())return false;
-    auto e=makeEdit();
-    if(e.start>=source->end()||e.start+e.duration<=source->start())return false;
-    processor.recording().add(e);
-    spectrumView->setPreview(e,true);
-    spectrumView->getImageBox().clearImage();spectrumView->selectEdit({});placementId={};
-    spectrumView->refreshCanvas();
-    return true;
-}
-// 聚焦态被修改：撤掉这次打印（频谱恢复原样），把对象自己的图片按打印范围
-// 摆回来，变成“未打印”的状态1，等待重新打印。
-void SpectrumTagAudioProcessorEditor::unprintFocused(){
-    const auto id=spectrumView->selectedEdit();
-    const auto edit=spectrumView->selectedPrint();
-    if(id.isEmpty()||!edit)return;
-    auto& box=spectrumView->getImageBox();
-    if(!box.hasImage()&&!edit->imagePath.isEmpty()&&juce::File(edit->imagePath).existsAsFile())box.loadImageFromFile(juce::File(edit->imagePath));
-    spectrumView->alignImageToPrint(*edit);
-    // 绘制层：这次打印正被退回的图片接替，不要在图片上下的频谱里挖出黑柱。
-    spectrumView->markPrintRevealed(id);
-    processor.recording().remove(id);
-    spectrumView->setPreview({});
-    spectrumView->selectEdit({});
-    spectrumView->refreshDeletedPrint();
-    placementId={};
-    spectrumView->refreshCanvas();
-    changed();
 }
 void SpectrumTagAudioProcessorEditor::removeSelected(){
     if(standalonePrintJob)return;
     finishChange(true);
     const auto focusedId=spectrumView->selectedEdit();
     const bool printed=focusedId.isNotEmpty()&&spectrumView->selectedPrint().has_value();
-    if(!printed&&(processor.filePlayerMode||!spectrumView->getImageBox().hasImage()))return;
+    if(!printed)return;
     spectrumView->discardPlacement();
     beginChange();
     if(printed){
@@ -2846,8 +2669,6 @@ void SpectrumTagAudioProcessorEditor::removeSelected(){
         spectrumView->selectEdit({});
         spectrumView->refreshDeletedPrint();
     }
-    // 删除的是“图片对象”本身：原图和它的打印一起消失，不会以任何方式回来。
-    if(!processor.filePlayerMode)spectrumView->getImageBox().clearImage();
     placementId={};spectrumView->sourcePrintId={};
     spectrumView->refreshCanvas();
     changed();finishChange(true);
@@ -2866,30 +2687,27 @@ void SpectrumTagAudioProcessorEditor::navigatePrint(bool next){
 }
 void SpectrumTagAudioProcessorEditor::selectPrinted(const juce::String& id){
     if(standalonePrintJob)return;
-    if(processor.filePlayerMode&&retainHiddenParameters&&!spectrumView->imageVisible
+    if(retainHiddenParameters&&!spectrumView->imageVisible
         &&(id.isEmpty()||id==spectrumView->selectedEdit()))return;
     showImageArtwork();
     finishChange(true);
     const bool copying=standaloneCopyOrigin.isNotEmpty();
-    const bool abandonDraft=processor.filePlayerMode&&(copying||spectrumView->stagedPlacement.has_value());
+    const bool abandonDraft=copying||spectrumView->stagedPlacement.has_value();
     const auto previous=copying?spectrumView->findPrint(standaloneCopyOrigin):spectrumView->selectedPrint();
     if(id.isEmpty()&&!previous&&!copying)return;
     if(id.isNotEmpty()&&!spectrumView->findPrint(id))return;
     beginChange();
     spectrumView->discardPlacement();
     retainHiddenParameters=false;
-    if(abandonDraft||(processor.filePlayerMode&&id.isNotEmpty()))spectrumView->imageVisible=false;
+    if(abandonDraft||id.isNotEmpty())spectrumView->imageVisible=false;
     standaloneCopyOrigin={};
     if(id.isEmpty()){
         if(abandonDraft&&previous){recallPrint(*previous);placementId=previous->id;}
         spectrumView->selectEdit({});
-        if(!processor.filePlayerMode){placementId={};spectrumView->getImageBox().clearImage();}
         spectrumView->refreshCanvas();
         changed();finishChange(true);
         return;
     }
-    // 只允许一个未打印对象：聚焦别的对象前，先把当前未打印的图片打印进去。
-    if(!processor.filePlayerMode&&spectrumView->imageStage()==SpectrumView::ImageStage::Placing)printPlacingObject();
     spectrumView->selectEdit(id);placementId=id;
     if(auto edit=spectrumView->selectedPrint()){
         recallPrint(*edit);
@@ -2906,14 +2724,10 @@ void SpectrumTagAudioProcessorEditor::recallPrint(const spectrumtag::PrintEdit& 
     assign(ParameterIDs::fftSize,edit.fftSize==1024?0.f:edit.fftSize==2048?1.f:2.f);assign(ParameterIDs::fftScale,edit.scaleMode==1?1.f:0.f);assign(ParameterIDs::frequencyPreset,(float)juce::jmax(0,edit.scaleMode-1));
     const float tops[]={20000,24000,22050,48000};int range=0;for(int i=1;i<4;++i)if(std::abs(tops[i]-edit.displayTop)<std::abs(tops[range]-edit.displayTop))range=i;
     assign(ParameterIDs::frequencyRange,(float)range);changingScaleControl=false;syncFrequencyScale();
-    // 状态3 只画打印范围和 Delete 提示，不显示源图；等用户拖动或改参数
-    // 退回状态1 时，才按 imagePath 把图片重新摆到打印范围上。
     auto& box=spectrumView->getImageBox();
-    if(processor.filePlayerMode){
-        spectrumView->sourcePrintId=edit.id;
-        if(box.getImagePath()!=edit.imagePath){box.clearImage();if(juce::File(edit.imagePath).existsAsFile())box.loadImageFromFile(juce::File(edit.imagePath));else box.setImagePathForRecall(edit.imagePath);}
-        box.setSpectrumPreview({});
-    }else box.clearImage();
+    spectrumView->sourcePrintId=edit.id;
+    if(box.getImagePath()!=edit.imagePath){box.clearImage();if(juce::File(edit.imagePath).existsAsFile())box.loadImageFromFile(juce::File(edit.imagePath));else box.setImagePathForRecall(edit.imagePath);}
+    box.setSpectrumPreview({});
     syncImagePreview();spectrumView->restorePrintView(edit);processor.rememberARAFrequencyChoice();suppressChanges=false;
 }
 spectrumtag::PrintEdit SpectrumTagAudioProcessorEditor::makeEdit(bool previewOnly){
@@ -2970,7 +2784,6 @@ void SpectrumTagAudioProcessorEditor::finishSelectedPreview(){
     if(spectrumView->selectedPrint())spectrumView->stagePlacement(editedSelection(false));
 }
 void SpectrumTagAudioProcessorEditor::updateStandalonePreview(){
-    if(!processor.filePlayerMode)return;
     const auto source=processor.recording().snapshot();
     if(source!=standalonePreviewSource){standalonePreviewSource=source;standalonePreviewDirty=true;}
     auto& box=spectrumView->getImageBox();
@@ -2994,7 +2807,16 @@ void SpectrumTagAudioProcessorEditor::updateStandalonePreview(){
         if(spectrumView->stagedPlacement)
             box.setSpectrumPreview(spectrumView->currentPreviewImage());
         else if(placing&&!source->empty())
-            box.setSpectrumPreview(spectrumtag::printPreview(*source,makeEdit(true),selectedPalette,true));
+            box.setSpectrumPreview(spectrumtag::printPreview(*source,makeEdit(true),selectedPalette,processor.filePlayerMode));
+    }else if(simulateSource&&placing&&spectrumView->imageVisible&&!processor.isLoadMode()&&!processor.recording().isEnabled()){
+        const auto history=processor.getSpectrumHistory();
+        if(!history->frames.empty()){
+            spectrumtag::RecordingSnapshot live;
+            live.sampleRate=history->frames.back()->sampleRate;
+            auto edit=makeEdit(true);
+            edit.compensation=0;
+            box.setSpectrumPreview(spectrumtag::printPreview(live,edit,selectedPalette,false,nullptr,{},nullptr,history.get()));
+        }else box.setSpectrumPreview({});
     }else box.setSpectrumPreview({});
 }
 void SpectrumTagAudioProcessorEditor::showImageArtwork(){
@@ -3003,7 +2825,7 @@ void SpectrumTagAudioProcessorEditor::showImageArtwork(){
     if(box.spectrumPreview.isValid())box.setSpectrumPreview({});
 }
 void SpectrumTagAudioProcessorEditor::toggleStandaloneImage(bool centreOnShow){
-    if(!processor.filePlayerMode||standalonePrintJob)return;
+    if(standalonePrintJob)return;
     beginChange();
     const bool show=!spectrumView->imageVisible;
     if(show&&centreOnShow){
@@ -3040,7 +2862,10 @@ void SpectrumTagAudioProcessorEditor::submitStandalonePrint(){
     auto& box=spectrumView->getImageBox();
     if(!engine.isEnabled()||!source||source->empty()||!box.hasImage())return;
     finishChange(true);syncImagePreview();persistEditorStateToProcessor();
-    const auto before=processor.captureUserState();
+    auto before=processor.captureUserState();
+#if SPECTRUMTAG_ARA
+    if(auto* view=processor.getEditorView<spectrumtag::ara::View>())before.ara=std::make_shared<const spectrumtag::ara::ViewState>(view->captureState());
+#endif
     const auto selected=spectrumView->selectedPrint();
     if((selected&&!spectrumView->stagedPlacement)||(!selected&&!spectrumView->imageVisible))return;
     auto edit=selected?editedSelection(true):makeEdit();
@@ -3058,7 +2883,7 @@ void SpectrumTagAudioProcessorEditor::submitStandalonePrint(){
             }
         }
     }
-    if(!edit.valid())return;
+    if(!edit.valid()||(!processor.filePlayerMode&&!source->overlaps(edit.start,edit.start+edit.duration)))return;
     engine.add(edit,replace);
     const auto submitted=engine.edits();
     if(std::none_of(submitted->begin(),submitted->end(),[&](const auto& e){return spectrumtag::sameEdit(e,edit);}))return;
@@ -3071,7 +2896,10 @@ void SpectrumTagAudioProcessorEditor::submitStandalonePrint(){
     spectrumView->setPreview(scheduled?std::optional<spectrumtag::PrintEdit>(edit):std::nullopt,scheduled);
     persistEditorStateToProcessor();stableState=processor.captureUserState();
     if(scheduled){
-        standalonePrintJob=StandalonePrintJob{before,stableState};
+        #if SPECTRUMTAG_ARA
+        if(auto* view=processor.getEditorView<spectrumtag::ara::View>())stableState.ara=std::make_shared<const spectrumtag::ara::ViewState>(view->captureState());
+#endif
+        standalonePrintJob=StandalonePrintJob{std::move(before),stableState};
         spectrumView->renderingPrint=edit;setStandalonePrinting(true);
     }else processor.commitUserChange(before,stableState);
 }
@@ -3083,17 +2911,31 @@ void SpectrumTagAudioProcessorEditor::finishStandalonePrint(bool cancel){
     const auto source=engine.snapshot();
     const bool ours=source&&job.before.document.source&&source->sourceId==job.before.document.source->sourceId
         &&engine.edits()==job.after.document.edits;
-    if(ours){
+#if SPECTRUMTAG_ARA
+    // The ARA compositor publishes new edit objects in project coordinates.
+    // Its document owns the canonical edit until selection changes.
+    const bool published=source&&job.before.document.source&&source->sourceId==job.before.document.source->sourceId
+        &&!engine.isBusy()&&spectrumView->renderingPrint&&std::any_of(source->edits.begin(),source->edits.end(),[&](const auto& edit){return edit.id==spectrumView->renderingPrint->id;});
+    if(!ours&&!published&&engine.isBusy())return;
+#else
+    constexpr bool published=false;
+#endif
+    if(ours||published){
         if(cancel){
+#if SPECTRUMTAG_ARA
+            if(auto* view=processor.getEditorView<spectrumtag::ara::View>();view&&job.before.ara)view->restoreState(*job.before.ara);
+            else return;
+#else
             if(!engine.cancelSubmittedPrint(job.after.document.edits,job.before.document))return;
+#endif
             processor.setEditorState(job.before.editor);
             restoreEditorStateFromProcessor();
             spectrumView->refreshCanvas();
         }else{
             // Finishing the computation and publishing its audio happen on the
             // worker. Do not put a cancelled or superseded Print in undo history.
-            if(source->edits.size()!=job.after.document.edits->size()||
-               !std::equal(source->edits.begin(),source->edits.end(),job.after.document.edits->begin(),spectrumtag::sameEdit))return;
+            if(!published&&(source->edits.size()!=job.after.document.edits->size()||
+               !std::equal(source->edits.begin(),source->edits.end(),job.after.document.edits->begin(),spectrumtag::sameEdit)))return;
             if(spectrumView->renderingPrint)spectrumView->rememberPrintBackground(*spectrumView->renderingPrint,*job.before.document.source);
             spectrumView->imageVisible=false;
             job.after.editor.imageVisible=false;
@@ -3105,8 +2947,20 @@ void SpectrumTagAudioProcessorEditor::finishStandalonePrint(bool cancel){
     if(cancel)spectrumView->focusVisibleImage();
 }
 
+void SpectrumTagAudioProcessorEditor::finishPrintOnDetach(){
+    if(!standalonePrintJob)return;
+    // The recording engine or ARA document keeps rendering after the editor closes.
+    // Transfer the accepted operation to processor-owned history before losing the UI.
+    auto& job=*standalonePrintJob;
+    if(processor.recording().edits()==job.after.document.edits){
+        job.after.editor.imageVisible=false;
+        spectrumView->imageVisible=false;
+        processor.commitUserChange(std::move(job.before),std::move(job.after));
+    }
+    standalonePrintJob.reset();setStandalonePrinting(false);
+}
+
 void SpectrumTagAudioProcessorEditor::onPrintClicked(){
-    if(processor.filePlayerMode){submitStandalonePrint();return;}
     processor.pollTransportTimeout();
     // ARA needs host audio. The standalone can print on its silent canvas.
     if(!processor.filePlayerMode&&processor.isLoadMode()&&!processor.hasLoadedAudio()){
@@ -3117,59 +2971,47 @@ void SpectrumTagAudioProcessorEditor::onPrintClicked(){
         spectrumView->flashAudioHint();
         return;
     }
+    if(processor.recording().isEnabled()){submitStandalonePrint();return;}
     if(!processor.recording().isEnabled()&&!processor.isTransportAdvancing()){
         processor.cancelPrint();
         if(auto* trigger=processor.getPrintTriggerParam())if(trigger->get())trigger->setValueNotifyingHost(0);
         lastSeenTrigger=false;printButton.setEnabled(true);return;
     }
-    // 只有“未打印”的图片对象可以打印；已打印对象要修改必须退回未打印态。
     if(processor.isPrintRunning())return;
-    if(spectrumView->imageStage()!=SpectrumView::ImageStage::Placing
-        &&!(processor.filePlayerMode&&spectrumView->imageVisible&&spectrumView->getImageBox().hasImage()))return;
+    if(!spectrumView->imageVisible||!spectrumView->getImageBox().hasImage())return;
     finishChange(true);beginChange();syncImagePreview();
-    if(processor.recording().isEnabled()){
-        // 渲染完成后对象只剩频谱里的挖空：源图随打印一起收起。
-        printPlacingObject();changed();finishChange(true);return;
-    }
     auto e=makeEdit();if(auto* trig=processor.getPrintTriggerParam())if(!trig->get())trig->setValueNotifyingHost(1);
     processor.markPrintClickAndBeginMathLog();processor.startPrint(std::vector<float>(*e.mask),e.rows,e.cols,e.low,e.high,e.duration);
-    spectrumView->getImageBox().clearImage();spectrumView->selectEdit({});placementId={};printButton.setEnabled(false);finishChange(true);
+    spectrumView->imageVisible=false;spectrumView->refreshCanvas();spectrumView->selectEdit({});placementId={};printButton.setEnabled(false);finishChange(true);
 }
 
 void SpectrumTagAudioProcessorEditor::persistEditorStateToProcessor(){
     if(!spectrumView)return;auto& box=spectrumView->getImageBox();auto s=processor.getEditorState();
     // imagePath 只保存“未打印/聚焦”对象：已打印未聚焦时源图已销毁，状态里不该再有它。
-    s.palette=selectedPalette;s.imageVisible=processor.filePlayerMode?spectrumView->imageVisible:box.hasImage();s.chinese=chineseTips;s.uiScale=uiScale;s.placementId=placementId;
-    if(processor.filePlayerMode){
-        s.standaloneDraft=spectrumView->stagedPlacement;s.standaloneCopyOrigin=standaloneCopyOrigin;
-        s.retainHiddenParameters=retainHiddenParameters;
-    }
+    s.palette=selectedPalette;s.imageVisible=spectrumView->imageVisible;s.chinese=chineseTips;s.uiScale=uiScale;s.placementId=placementId;
+    s.standaloneDraft=spectrumView->stagedPlacement;s.standaloneCopyOrigin=standaloneCopyOrigin;
+    s.retainHiddenParameters=retainHiddenParameters;
     s.imagePath=box.getImagePath();auto n=box.getNormalisedBounds();s.imgRectXNorm=n.getX();s.imgRectYNorm=n.getY();s.imgRectWNorm=n.getWidth();s.imgRectHNorm=n.getHeight();s.imgBoxWidthPx=(float)box.getWidth();s.spectrumHeightPx=spectrumView->getContentBounds().getHeight();
     s.hasValidValues=true;spectrumView->saveView(s);processor.setEditorState(s);
 }
 void SpectrumTagAudioProcessorEditor::restoreEditorStateFromProcessor(){
     if(!spectrumView)return;spectrumView->stagedPlacement.reset();spectrumView->setPreview({});auto s=processor.getEditorState();bool previous=suppressChanges;suppressChanges=true;lastStateRevision=processor.getStateRevision();
     selectPalette(s.palette,false);chineseTips=s.chinese;placementId=s.placementId;
-    if(processor.filePlayerMode){spectrumView->imageVisible=s.imageVisible;spectrumView->sourcePrintId=s.placementId;standaloneCopyOrigin=s.standaloneCopyOrigin;}
+    spectrumView->imageVisible=s.imageVisible;spectrumView->sourcePrintId=s.placementId;standaloneCopyOrigin=s.standaloneCopyOrigin;
 #if !SPECTRUMTAG_ARA
         if(!processor.filePlayerMode)setSize(juce::roundToInt(kDefaultWidth*s.uiScale),juce::roundToInt(kDefaultHeight*s.uiScale));
 #endif
-    // 状态里没有 imagePath 就代表没有“未打印/聚焦”对象：已打印对象只存在于
-    // 录音的 Print 列表里，所以这里必须清空源图，否则删除过的图片会复活。
-    // 旧存档把“隐藏的源图”记成 imageVisible=0：新模型里对象只有未打印（可见）
-    // 与聚焦（可见）两种带图状态，这种隐藏图没有对象归属，直接丢弃。
     auto& box=spectrumView->getImageBox();
-    const bool legacyHidden=!processor.filePlayerMode&&!s.imageVisible&&s.selectedPrint.isEmpty();
-    const auto restoredPath=legacyHidden?juce::String():s.imagePath;
+    const auto& restoredPath=s.imagePath;
     if(box.getImagePath()!=restoredPath){box.clearImage();if(juce::File(restoredPath).existsAsFile())box.loadImageFromFile(juce::File(restoredPath));else box.setImagePathForRecall(restoredPath);}
     if(s.hasValidValues&&box.hasImage())box.setNormalisedBounds({s.imgRectXNorm,s.imgRectYNorm,s.imgRectWNorm,s.imgRectHNorm});
     spectrumView->setScaleMode(processor.getFrequencyScale());spectrumView->restoreView(s);
     syncImagePreview();refreshLanguage();suppressChanges=previous;
-    pendingChange=pendingRevert=pendingSelected=pendingDuration=pendingFrequency=pendingPresetTiming=false;
+    pendingChange=pendingSelected=pendingDuration=pendingFrequency=pendingPresetTiming=false;
     showImageArtwork();
-    retainHiddenParameters=processor.filePlayerMode&&s.retainHiddenParameters;
+    retainHiddenParameters=s.retainHiddenParameters;
     box.setSpectrumPreview({});
-    if(processor.filePlayerMode&&s.standaloneDraft&&spectrumView->selectedEdit()==s.standaloneDraft->id&&spectrumView->selectedPrint())
+    if(s.standaloneDraft&&spectrumView->selectedEdit()==s.standaloneDraft->id&&spectrumView->selectedPrint())
         spectrumView->stagePlacement(*s.standaloneDraft);
     standalonePreviewDirty=true;
 }
@@ -3182,12 +3024,10 @@ bool SpectrumTagAudioProcessorEditor::loadImageObject(const juce::File& file){
     // 没有音频就没有可打印的画布：拒绝导入，只提示先加载音频。
     if(standalonePrintJob)return false;
     if(!audioReady()){spectrumView->flashAudioHint();return false;}
-    // 同一时间只允许一个未打印对象：已有未打印图片时，先把上一张打印进频谱。
-    if(!processor.filePlayerMode&&spectrumView->imageStage()==SpectrumView::ImageStage::Placing)printPlacingObject();
     auto& box=spectrumView->getImageBox();
-    const auto target=processor.filePlayerMode&&spectrumView->imageVisible?spectrumView->selectedPrint():std::nullopt;
+    const auto target=spectrumView->imageVisible?spectrumView->selectedPrint():std::nullopt;
     if(!box.loadImageFromFile(file))return false;
-    if(processor.filePlayerMode&&!target){
+    if(!target){
         spectrumView->selectEdit({});
         spectrumView->discardPlacement();
     }
@@ -3218,12 +3058,10 @@ bool SpectrumTagAudioProcessorEditor::loadImageObject(const juce::File& file){
     }else{
         spectrumView->selectEdit({});placementId={};spectrumView->sourcePrintId={};
     }
-    if(processor.filePlayerMode){
-        spectrumView->imageVisible=true;
-        const auto path=box.getImagePath(),directory=file.getParentDirectory().getFullPathName();
-        spectrumtag::Preferences::remember(&path,nullptr,nullptr,nullptr,&directory);
-        retainHiddenParameters=false;simulateImage=target.has_value();
-    }
+    spectrumView->imageVisible=true;
+    const auto path=box.getImagePath(),directory=file.getParentDirectory().getFullPathName();
+    spectrumtag::Preferences::remember(&path,nullptr,nullptr,nullptr,&directory);
+    retainHiddenParameters=false;simulateImage=target.has_value();
     standalonePreviewDirty=true;
     spectrumView->refreshCanvas();
     return true;
@@ -3232,61 +3070,6 @@ void SpectrumTagAudioProcessorEditor::imagePicked(const juce::File& file){
     finishChange(true);beginChange();
     if(!loadImageObject(file)){finishChange(true);return;}
     changed();finishChange(true);
-}
-// Ctrl+拖动图片：原对象留在原位变成 Print，拖走的是同样的副本。
-// 撤销步由这次手势松手时的 onGestureEnd 一起提交。
-void SpectrumTagAudioProcessorEditor::duplicateImageObject(){
-    auto& box=spectrumView->getImageBox();
-    if(!box.hasImage()||spectrumView->imageStage()!=SpectrumView::ImageStage::Placing)return;
-    const juce::File file(box.getImagePath());
-    if(!file.existsAsFile())return;
-    // 打印不成立（没有可打印的音频）时保持原样，退化成普通拖动。
-    if(!printPlacingObject())return;
-    box.loadImageFromFile(file);
-    spectrumView->selectEdit({});placementId={};
-    syncImagePreview();spectrumView->refreshCanvas();changed();
-}
-// Ctrl+C：记录当前对象的图片。聚焦的 Print 用它记录的原图，未打印对象用图片框里的图。
-bool SpectrumTagAudioProcessorEditor::copyImageObject(){
-    juce::String path;
-    if(const auto edit=spectrumView->selectedPrint())path=edit->imagePath;
-    else if(spectrumView->getImageBox().hasImage())path=spectrumView->getImageBox().getImagePath();
-    if(path.isEmpty()||!juce::File(path).existsAsFile())return false;
-    clipboardImagePath=path;
-    copyButtonPaste=true;refreshCopyButton();
-    return true;
-}
-// Ctrl+V：以当前播放位置为左边缘新建一份副本。正在聚焦的对象先取消聚焦，
-// 它本身已经打印在频谱里（等于自动打印），图片框腾出来放新对象；
-// 若还有未打印的图片对象，loadImageObject 会先把它打印掉。
-bool SpectrumTagAudioProcessorEditor::pasteImageObject(){
-    if(clipboardImagePath.isEmpty())return false;
-    const juce::File file(clipboardImagePath);
-    if(!file.existsAsFile())return false;
-    const double at=processor.audition().position();
-    finishChange(true);beginChange();
-    if(spectrumView->selectedPrint()){
-        // 与“点空白处取消聚焦”一致：打印留在频谱里，图片框腾空准备接新对象。
-        spectrumView->selectEdit({});placementId={};
-        spectrumView->getImageBox().clearImage();
-        spectrumView->refreshCanvas();
-    }
-    if(!loadImageObject(file)){finishChange(true);refreshCopyButton();return false;}
-    spectrumView->placeImageStartAt(at);
-    copyButtonPaste=false;
-    changed();finishChange(true);
-    refreshCopyButton();
-    return true;
-}
-// 复制按钮：平时是「复制」（等同 Ctrl+C），记录好之后变成「粘贴」（等同 Ctrl+V）。
-void SpectrumTagAudioProcessorEditor::refreshCopyButton(){
-    const bool paste=copyButtonPaste&&clipboardImagePath.isNotEmpty();
-    copyImageButton.setButtonText(juce::String::fromUTF8(paste?(chineseTips?"粘贴":"Paste"):(chineseTips?"复制":"Copy")));
-    copyImageButton.setTooltip(juce::String::fromUTF8(paste
-        ?(chineseTips?"粘贴：结束当前聚焦，并在播放位置新建一份副本。快捷键 Ctrl+V。"
-                     :"Paste: end the current focus and create a copy at the playhead. Shortcut: Ctrl+V.")
-        :(chineseTips?"复制当前图片对象，随后可在播放位置粘贴副本。快捷键 Ctrl+C。"
-                     :"Copy the current image object, then paste a copy at the playhead. Shortcut: Ctrl+C.")));
 }
 void SpectrumTagAudioProcessorEditor::refreshLanguage(){
     auto tr=[this](const char* zh,const char* en){return juce::String::fromUTF8(chineseTips?zh:en);};lookAndFeel.setChinese(chineseTips);
@@ -3308,7 +3091,6 @@ void SpectrumTagAudioProcessorEditor::refreshLanguage(){
     fftScaleCombo.setSelectedId(1+processor.getFrequencyScale(),juce::dontSendNotification);
     imageModeCombo.sendLookAndFeelChange();fftScaleCombo.sendLookAndFeelChange();
     removePrintButton.setButtonText(tr("删除","Delete"));previousPrintButton.setButtonText(tr("上一个打印","Previous Print"));nextPrintButton.setButtonText(tr("下一个打印","Next Print"));
-    refreshCopyButton();
     recordButton.setButtonText(processor.isLoadMode()?tr("加载音频","Load audio"):tr("录音","Record"));printButton.setButtonText(tr("打印","Print"));printButton.setTypeface(chineseTips?spectrumtag::ui::chineseTypeface():basementTypeface);printButton.setTypeScale(chineseTips?spectrumtag::ui::chineseScale:1.0f);
     spectrumView->setChinese(chineseTips);tooltipLanguageButton.setButtonText(juce::String::fromUTF8(chineseTips?"中文":"EN"));updateTooltips();resized();repaint();
 }
@@ -3339,10 +3121,7 @@ void SpectrumTagAudioProcessorEditor::updateTooltips(){
     const auto fineTip=tr(" 按住 Shift 拖动或滚轮可微调（1/10 速度）。"," Hold Shift while dragging or scrolling for fine adjustment (1/10 speed).");
     for(auto* slider:{&speedSlider,&amplitudeSlider,&imageAmountSlider,&imageGrayContrastSlider,&imageGrayBrightnessSlider,&noiseFillSlider})slider->setTooltip(slider->getTooltip()+fineTip);
     printButton.setTooltip(tr("未录音时仅在播放期间实时试听；停止时点击不执行，也不排队。录音后隐藏原图，在图片位置显示模拟图形和渲染进度，完成后显示真实频谱。同一位置重复打印不会叠加。","Before recording, Print auditions only while playing; stopped clicks do nothing and are not queued. Recorded mode hides the source image and shows a simulation with render progress at its position, then the actual spectrum. Repeating Print replaces without stacking."));
-    auto navigation=tr("滚轮左右浏览；Shift 或 Ctrl+滚轮只缩放时间视图。单击已打印的图形会聚焦它并显示原图与边框；点击非打印区域定位并取消聚焦。图片下方按钮把图片打印进频谱；聚焦后任何拖动或参数修改都会撤掉这次打印、回到未打印状态，需要重新打印。Ctrl+拖动图片＝原位留一份打印、拖走同样的副本；Ctrl+C 记录当前对象，Ctrl+V 随时可在播放位置新建副本，正在聚焦的对象会保留为打印并取消聚焦。Ctrl+Z 撤销。下方波形可按住拖动连续定位；拖动白框左右两端可缩放时间视图（等同 Speed / Ctrl+滚轮）。","Wheel pans time; Shift or Ctrl-wheel scales the time view only. Click a Print to focus it and reveal the source image with its frame; clicking elsewhere seeks and unfocuses. The button under the image prints it into the spectrum; once focused, any drag or parameter change removes that Print and returns to the unprinted state, so print again afterwards. Ctrl-drag the image leaves a Print in place and drags a copy; Ctrl+C copies the current object, Ctrl+V creates a copy at the playhead at any time, keeping a focused Print printed and unfocusing it. Ctrl+Z undoes. Drag the overview waveform to scrub; drag either edge of its white view box to zoom the time view (same as Speed / Ctrl-wheel).");
-    spectrumView->setTooltip(navigation);spectrumView->getImageBox().setTooltip(tr("拖动移动，右下角等比缩放，Ctrl+拖动留下一份副本，单击或双击换图。","Drag to move; lower-right corner resizes proportionally; Ctrl-drag leaves a copy behind; click or double-click to load an image.")+"\n"+navigation);
-    spectrumView->setPrintButtonTooltip(tr("把这张图片打印进频谱。打印后图片隐藏，点击频谱里的位置可以重新聚焦并查看边框。","Print this picture into the spectrum. The image is hidden afterwards; click its position in the spectrum to focus it again."));
-    if(processor.filePlayerMode){
+    {
         imageVisibilityButton.setTooltip(tr("显示或隐藏原图，也可右键切换。","Show or hide the source image. Right-click also toggles it."));
         frequencyRangeCombo.setTooltip(tr("显示频率上限，默认为 20 kHz。","Upper display frequency. The default is 20 kHz."));
         imageStyleCombo.setTooltip(tr("切换模式先看转换结果：Logo 显示黑白图，复杂图像显示灰度图。调整参数时实时预览频谱效果。","Switch styles to see the conversion: black and white for Logo, grayscale for Complex image. Adjust a parameter to preview the spectrum."));
@@ -3352,6 +3131,8 @@ void SpectrumTagAudioProcessorEditor::updateTooltips(){
         amplitudeSlider.setTooltip(tr("实时预览打印区域的保留音量，点击打印后应用。","Preview the remaining gain inside the image. Click Print to apply.")+fineTip);
         frequencyRangeCombo.setTooltip(tr("实时预览频率上限，默认 20 kHz。点击打印后应用到选中的图案。","Preview the frequency ceiling, default 20 kHz. Click Print to apply to the selected image."));
         spectrumView->setTooltip(liveHelp);spectrumView->getImageBox().setTooltip(liveHelp);
+    }
+    if(processor.filePlayerMode){
         recordButton.setTooltip(tr("选择本地音频或视频音轨；也可直接拖入文件。", "Choose local audio or a video soundtrack, or drag a file into the window."));
         clearRecordButton.setTooltip(tr("清空加载的音频及打印；Ctrl+Z 可撤销。", "Clear loaded audio and Prints; Ctrl+Z restores them."));
         printButton.setTooltip(tr("将图片渲染到音频内或前后空白处；空白处由噪声补偿生成声音，导出时包含延长的部分，视频相应补黑帧。删除打印会撤回对应延长。最多 15 分钟 / 6400 万采样，使用导出按原格式保存。", "Print inside audio or empty time before/after it. Noise Fill supplies sound in silence; Export includes the extension and pads video with black frames. Deleting the Print removes its extension. Limit: 15 minutes / 64M samples. Export keeps the source format."));

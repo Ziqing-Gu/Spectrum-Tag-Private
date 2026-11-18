@@ -8,8 +8,8 @@ namespace spectrumtag {
 // STFT phase, overlap/window leakage and stereo correlation are approximated;
 // the exact rendered spectrum replaces this image after the gesture finishes.
 inline juce::Image printPreview(const RecordingSnapshot& source,const PrintEdit& edit,int palette,bool fillEmpty=false,
-        const std::vector<PrintEdit>* remainingEdits=nullptr,juce::Point<int> pixelSize={},const RecordingSnapshot* savedBackground=nullptr) {
-    if(source.empty()||(!remainingEdits&&!edit.valid())||edit.duration<=0||edit.low>=edit.high)return {};
+        const std::vector<PrintEdit>* remainingEdits=nullptr,juce::Point<int> pixelSize={},const RecordingSnapshot* savedBackground=nullptr,const SpectrumHistory* live=nullptr) {
+    if((!live&&source.empty())||(!remainingEdits&&!edit.valid())||edit.duration<=0||edit.low>=edit.high)return {};
     const int w=pixelSize.x>0?pixelSize.x:juce::jmin(512,edit.cols);
     const int h=pixelSize.y>0?pixelSize.y:juce::jmin(512,edit.rows);
     const float nyquist=(float)source.sampleRate*.5f;
@@ -18,7 +18,11 @@ inline juce::Image printPreview(const RecordingSnapshot& source,const PrintEdit&
     std::vector<const SpectrumFrame*> columns((size_t)w);
     std::vector<bool> exactBackground((size_t)w,false);
     for(int x=0;x<w;++x){times[x]=edit.start+(x+.5)*edit.duration/w;
-        if(savedBackground&&times[x]>=savedBackground->start()&&times[x]<savedBackground->end()){
+        if(live){
+            const auto& frames=live->frames;
+            const auto it=std::lower_bound(frames.begin(),frames.end(),times[x],[](const auto& f,double time){return f->time<time;});
+            if(it!=frames.end()&&(*it)->time-times[x]<=(*it)->interval*1.5)columns[x]=it->get();
+        }else if(savedBackground&&times[x]>=savedBackground->start()&&times[x]<savedBackground->end()){
             columns[x]=savedBackground->frameAt(times[x]);
             exactBackground[x]=true;
         }else if(remainingEdits||source.contains(llround(times[x]*source.sampleRate)))columns[x]=source.frameAt(times[x],false);
@@ -37,7 +41,7 @@ inline juce::Image printPreview(const RecordingSnapshot& source,const PrintEdit&
         // Any mask can contain detail narrower than a single STFT
         // window. Sample its neighbouring time slices to estimate the
         // overlap-add response instead of displaying razor-sharp transitions.
-        const bool smoothMask=fillEmpty;
+        const bool smoothMask=remainingEdits==nullptr||fillEmpty;
         if(smoothMask){layer.earlierCols.resize(w);layer.laterCols.resize(w);}
         layer.rows.resize(h,-1);layer.cols.resize(w,-1);layer.edges.resize(h);layer.envelopes.resize(w);
         for(int y=0;y<h;++y){const float f=frequencies[y];if(f<e.low||f>e.high)continue;

@@ -246,6 +246,21 @@ int main(int argc,char** argv){try{
         auto* language=dynamic_cast<juce::Button*>(component(*editor,"tooltipLanguage"));check(language!=nullptr,"language switch exists");
         language->onClick();check(dynamic_cast<juce::Button*>(component(*editor,"loadButton"))->getButtonText()=="Load audio","English ARA labels");language->onClick();
         std::cout<<"PASS Load UI, bilingual controls, host bounds/scale, multi-event overview, empty gap, host seek request\n"<<std::flush;
+        {
+            check(loaded->overlaps(10.05,10.35)&&!loaded->overlaps(10.13,10.29),"ARA confirmed coverage and gap");
+            PrintEdit across;across.start=10.04;across.duration=.32;across.low=.02f;across.high=.75f;
+            across.rows=513;across.cols=64;across.fftSize=1024;across.ratio=0;
+            across.mask=std::make_shared<const std::vector<float>>(across.rows*across.cols,1.f);
+            auto* first=static_cast<Modification*>(ARA::PlugIn::fromRef(modifications[0]));
+            auto* second=static_cast<Modification*>(ARA::PlugIn::fromRef(modifications[1]));
+            const auto before=view->captureState();
+            p.recording().add(across);
+            check(first->edits.size()==1&&second->edits.size()==1,"spanning Print reaches both source modifications");
+            view->restoreState(before);
+            waitFor(*owner,[&]{auto s=p.recording().snapshot();return s&&!p.recording().isBusy()&&s->edits.empty();},"cancel spanning ARA Print");
+            check(first->edits.empty()&&second->edits.empty()&&first->runtime->audio()->edits.empty()&&second->runtime->audio()->edits.empty(),"cancel restores both source renders");
+            std::cout<<"PASS two-event Print and cancellation preserve the gap and restore both sources\n";
+        }
         PrintEdit edit;edit.start=10.02;edit.duration=.075;edit.low=0;edit.high=.9f;edit.rows=129;edit.cols=32;edit.fftSize=1024;edit.ratio=0;edit.compensation=.4f;edit.mask=std::make_shared<const std::vector<float>>(edit.rows*edit.cols,1.f);
         auto before=p.captureUserState();p.recording().add(edit);auto after=p.captureUserState();p.commitUserChange(before,after);
         // Closing the editor must not stop document-owned rendering.

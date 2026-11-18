@@ -55,7 +55,7 @@ static void revision149Checks(const juce::File& dir){
         scale->setSelectedId(mode+1,juce::sendNotificationSync);tickUI();
         if(mode<4)require(std::abs(speed->getValue()-spectrumtag::timing::presetSpeed(mode,468))<1e-6&&std::abs(p.getEditorState().viewZoom-1)<1e-8,"149 external preset resets to matched speed and zoom");
         // 上一轮 Delete 已经把图片对象一起销毁，这里补齐一张（首轮已有）。
-        if(!box->hasImage()){dynamic_cast<juce::FileDragAndDropTarget*>(editor.get())->filesDropped({fixture.getFullPathName()},0,0);tickUI();}
+        if(!box->hasImage()||!box->isVisible()){dynamic_cast<juce::FileDragAndDropTarget*>(editor.get())->filesDropped({fixture.getFullPathName()},0,0);tickUI();}
         // 4/6 档切换预设会重新校准视图，先全览保证图片框落在录音范围内
         // （这两档不参与“参考外部窗口”的比例断言）。
 
@@ -98,13 +98,14 @@ static void revision149Checks(const juce::File& dir){
         for(int64_t i=rendered->first;i<rendered->last;i+=109)require(p.recording().snapshot()->sample(0,i)==rendered->sample(0,i,false),"149 Delete restores original audio");
     }
     // 聚焦对象调整频率刻度：撤掉这次打印、退回未打印态，撤销可完整恢复。
+    dynamic_cast<juce::FileDragAndDropTarget*>(editor.get())->filesDropped({fixture.getFullPathName()},0,0);tickUI();
     scale->setSelectedId(1,juce::sendNotificationSync);tickUI();print->onClick();require(p.recording().flush(),"149 initial linear Print");tickUI();auto original=p.recording().snapshot();const auto before=original->edits.front();
     for(int mode:{2,4,5,6}){
         const auto centre=view->getLocalPoint(box,box->getLocalBounds().getCentre()).toFloat();
         view->mouseDown(mouseAt(*view,centre));view->mouseUp(mouseAt(*view,centre));tickUI();
         scale->setSelectedId(mode+1,juce::sendNotificationSync);
-        for(int i=0;i<300&&!p.recording().edits()->empty();++i){juce::Thread::sleep(10);tickUI();}
-        require(p.recording().edits()->empty(),"149 preset change on a focused Print reverts it to unprinted");
+        juce::Thread::sleep(220);tickUI();
+        require(p.recording().edits()->size()==1&&sameEdit(p.recording().edits()->front(),before),"preset change previews without changing the committed Print");
         editor->keyPressed(juce::KeyPress('Z',juce::ModifierKeys::ctrlModifier,0));require(p.recording().flush(),"149 revert Undo");tickUI();
         require(p.getFrequencyScale()==0&&sameEdit(p.recording().edits()->front(),before),"149 Undo restores frequency and time settings");
         for(int64_t i=original->first;i<original->last;i+=109)require(original->sample(0,i)==p.recording().snapshot()->sample(0,i),"149 Undo restores exact audio");

@@ -378,7 +378,7 @@ private:
     private:
         const bool pointsRight;
     };
-    juce::TextButton recordButton {"Record"},removePrintButton {"Delete"},copyImageButton {"Copy"};
+    juce::TextButton recordButton {"Record"},removePrintButton {"Delete"};
     class EyeButton : public juce::Button {
     public:
         EyeButton():juce::Button("Image"){}
@@ -398,7 +398,7 @@ private:
     juce::Label frequencyRangeLabel {{},"Range:"};
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> frequencyRangeAttachment;
     // 三态图片对象：未打印（可编辑）/ 已打印未聚焦 / 已打印聚焦。
-    bool suppressChanges=true,gestureActive=false,pendingChange=false,pendingRevert=false,wheelChange=false;
+    bool suppressChanges=true,gestureActive=false,pendingChange=false,wheelChange=false;
     bool pendingSelected=false,pendingDuration=false,pendingFrequency=false,pendingPresetTiming=false;
     bool retainHiddenParameters=false, simulateImage=false;
     void showImageArtwork();
@@ -413,6 +413,7 @@ private:
     std::optional<StandalonePrintJob> standalonePrintJob;
     void submitStandalonePrint();
     void finishStandalonePrint(bool cancel);
+    void finishPrintOnDetach();
     void setStandalonePrinting(bool printing);
     void updateStandalonePreview();
     void toggleStandaloneImage(bool centreOnShow=false);
@@ -423,8 +424,6 @@ private:
     juce::String standaloneCopyOrigin; // Committed Print a reusable source was dragged from.
     juce::String placementId;      // 当前聚焦对象对应的打印 id（仅在聚焦时有意义）
     bool audioReady() const;
-    bool printPlacingObject();     // 把“未打印”对象渲染进频谱，成功后对象进入已打印态
-    void unprintFocused();         // 已打印聚焦态被修改：撤掉打印，退回未打印态
     void beginChange();
     void changed(bool selectedParameters=false);
     void finishChange(bool force=false);
@@ -440,12 +439,6 @@ private:
     void imagePicked(const juce::File&);
     // 图片对象的新建/复制：loadImageObject 只负责载入并落位，撤销步由调用者提交。
     bool loadImageObject(const juce::File& file);
-    void duplicateImageObject();   // Ctrl+拖动：原位留一份 Print，拖走副本
-    bool copyImageObject();        // Ctrl+C：记录当前对象的图片
-    bool pasteImageObject();       // Ctrl+V：在播放位置新建一份副本
-    void refreshCopyButton();      // 复制/粘贴按钮的文案与提示
-    juce::String clipboardImagePath;
-    bool copyButtonPaste=false;    // 复制按钮已记录对象，下一步是粘贴
     void updateTooltips();
     juce::LookAndFeel_V4 tooltipLookAndFeel;
     juce::TooltipWindow tooltipWindow {this,600};

@@ -123,20 +123,21 @@ static void recordingChecks(const juce::File& dir) {
     require(p.recording().snapshot()->revision==priorRevision,"Speed drag never renders audio before release");
     require(std::abs(imageBox(*editor)->getWidth()-previewWidth)<2&&std::abs((double)imageBox(*editor)->getWidth()/imageBox(*editor)->getHeight()-imageAspect)<.01,"Speed preserves image dimensions and aspect");
     speedSlider->onDragEnd();
-    for(int i=0;i<300&&!p.recording().edits()->empty();++i){juce::Thread::sleep(10);tickUI();}
-    require(p.recording().edits()->empty(),"Speed release reverts the focused Print to unprinted");
-    require(imageBox(*editor)->isVisible()&&imageBox(*editor)->hasImage(),"object returns to the unprinted state");
+    juce::Thread::sleep(220);tickUI();
+    require(p.recording().edits()->size()==1&&sameEdit(p.recording().edits()->front(),placed),"Speed release keeps the committed Print");
+    require(!imageBox(*editor)->isVisible()&&imageBox(*editor)->hasImage(),"pattern stays selected with its source hidden");
     require(editor->keyPressed(juce::KeyPress('Z',juce::ModifierKeys::ctrlModifier,0)),"Ctrl Z handled");require(p.recording().flush(),"undo speed revert");tickUI();
     require(p.recording().snapshot()->edits.size()==1,"one undo restores the Print and its Speed");
     // 删除聚焦对象后重新开始，验证“只允许一个未打印对象”的拖入规则。
     require(editor->keyPressed(juce::KeyPress(juce::KeyPress::deleteKey)),"Delete key removes the focused object");
     require(p.recording().flush(),"delete focused object");tickUI();
-    require(p.recording().edits()->empty()&&!imageBox(*editor)->hasImage(),"Delete destroys both the Print and its source image");
+    require(p.recording().edits()->empty()&&imageBox(*editor)->hasImage(),"Delete removes the Print and retains the reusable artwork");
     dynamic_cast<juce::FileDragAndDropTarget*>(editor.get())->filesDropped({dir.getChildFile("transparent-detail.png").getFullPathName()},0,0);tickUI();
     require(imageBox(*editor)->hasImage()&&p.recording().edits()->empty(),"a fresh drop becomes the single unprinted object");
     // 只允许一个未打印对象：再拖入一张会先把当前未打印图片打印进频谱。
     dynamic_cast<juce::FileDragAndDropTarget*>(editor.get())->filesDropped({dir.getChildFile("transparent-detail.png").getFullPathName()},0,0);tickUI();
-    require(p.recording().edits()->size()==1&&imageBox(*editor)->hasImage()&&imageBox(*editor)->isVisible(),"dropping a second image prints the previous unprinted one");
+    require(p.recording().edits()->empty()&&imageBox(*editor)->hasImage()&&imageBox(*editor)->isVisible(),"dropping a second image replaces only the draft");
+    print->onClick();require(p.recording().flush(),"commit second image explicitly");tickUI();
     png(dir.getChildFile("recorded-print-selected.png"),editor->createComponentSnapshot(editor->getLocalBounds()));
     view->mouseDown(mouseAt(*view,{70+width*.25f,(float)view->getHeight()-50}));
     transport.playing=true;transport.sample=240000;block.clear();p.processBlock(block,midi);
@@ -164,8 +165,8 @@ static void recordingChecks(const juce::File& dir) {
     const float centreX=70+(float)((selectedEdit.start+selectedEdit.duration*.5-10)/3)*width;
     view->mouseDown(mouseAt(*view,{centreX,height*.45f}));tickUI();
     fill->onDragStart();fill->setValue(.4,juce::sendNotificationSync);juce::Thread::sleep(200);fill->onDragEnd();
-    for(int i=0;i<300&&!p.recording().edits()->empty();++i){juce::Thread::sleep(10);tickUI();}
-    require(p.recording().edits()->empty(),"focused Noise Fill edit reverts the Print to unprinted");
+    juce::Thread::sleep(220);tickUI();
+    require(p.recording().edits()->size()==1&&sameEdit(p.recording().edits()->front(),selectedEdit),"Noise Fill draft leaves audio intact");
     auto* printEntry=dynamic_cast<juce::Button*>(componentWithID(*editor,"printButton"));require(printEntry!=nullptr,"print entry");
     printEntry->onClick();require(p.recording().flush(),"reprint with adjusted Noise Fill");tickUI();
     require(std::abs(p.recording().snapshot()->edits.front().compensation-.4f)<1e-6,"selected Print stores adjusted compensation");

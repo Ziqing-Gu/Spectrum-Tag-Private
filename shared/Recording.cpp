@@ -23,6 +23,21 @@ bool RecordingSnapshot::contains(int64_t absolute) const {
     const auto page=(size_t)(index/recordingPageSize);
     return page<original.size()&&original[page]&&original[page]->valid[(size_t)(index%recordingPageSize)];
 }
+bool RecordingSnapshot::overlaps(double startSeconds,double endSeconds) const {
+    const auto begin=juce::jmax(first,(int64_t)std::floor(startSeconds*sampleRate))-origin;
+    const auto end=juce::jmin(last,(int64_t)std::ceil(endSeconds*sampleRate))-origin;
+    for(auto at=begin;at<end;){
+        const auto page=(size_t)(at/recordingPageSize);
+        const int offset=(int)(at%recordingPageSize);
+        const int count=(int)juce::jmin<int64_t>(recordingPageSize-offset,end-at);
+        if(page<original.size()&&original[page]&&original[page]->valid.any()){
+            if(count==recordingPageSize)return true;
+            for(int i=offset;i<offset+count;++i)if(original[page]->valid[i])return true;
+        }
+        at+=count;
+    }
+    return false;
+}
 const SpectrumFrame* RecordingSnapshot::frameAt(double seconds,bool processed) const {
     // The retained boundary tile can extend beyond a shortened standalone
     // timeline. Its old bins are not part of the current audio extent.

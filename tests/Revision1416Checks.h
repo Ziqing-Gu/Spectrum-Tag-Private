@@ -17,6 +17,7 @@ inline void ui(SpectrumTagAudioProcessor& p,const juce::File& dir,const std::fun
     const auto path=dir.getChildFile("1416-gradient.png");{auto stream=path.createOutputStream();need(stream!=nullptr,"1416 PNG output");stream->setPosition(0);stream->truncate();juce::PNGImageFormat format;format.writeImageToStream(gradient,*stream);}
     PrintEdit e;e.start=source->start()+.02;e.duration=.075;e.low=0;e.high=.25f;e.fftSize=1024;e.rows=513;e.cols=128;e.imageMode=2;e.scaleMode=0;e.displayTop=20000;e.imageAspect=128.f/96;e.imagePath=path.getFullPathName();
     e.viewZoom=120/(60*e.duration);auto mask=std::make_shared<std::vector<float>>(e.rows*e.cols);for(int y=0;y<e.rows;++y)for(int x=0;x<e.cols;++x)(*mask)[(size_t)y*e.cols+x]=x<64?1.f:0.f;e.mask=mask;
+    p.recording().setDisplayFft(e.fftSize);
     p.recording().setEdits({e});wait([&]{auto s=p.recording().snapshot();return !p.recording().isBusy()&&s&&s->edits.size()==1&&s->edits[0].id==e.id;},"1416 initial Print");
     auto state=p.getEditorState();state.uiScale=1;state.imagePath=e.imagePath;state.imageVisible=false;state.selectedPrint=e.id;state.chinese=false;state.palette=7;state.viewValid=true;state.viewFit=false;state.viewFollow=false;state.viewZoom=e.viewZoom;state.viewEnd=e.start+e.duration*.5+(830/(60*e.viewZoom))*.5;p.setEditorState(state);
     std::unique_ptr<juce::AudioProcessorEditor> editor(p.createEditor());auto* view=find(*editor,"spectrumView");auto* amount=dynamic_cast<juce::Slider*>(find(*editor,"imageAmount"));auto* image=box(*editor);need(view&&amount&&image,"1416 preview controls");
@@ -63,7 +64,13 @@ inline void ui(SpectrumTagAudioProcessor& p,const juce::File& dir,const std::fun
     auto bounds=juce::Rectangle<int>((int)view->getProperties()["selectedX"],(int)view->getProperties()["selectedY"],(int)view->getProperties()["selectedW"],(int)view->getProperties()["selectedH"]).reduced(4).withTrimmedTop(18).getIntersection(view->getLocalBounds());
     int changed=0;for(int y=bounds.getY();y<bounds.getBottom();++y)for(int x=bounds.getX();x<bounds.getRight();++x)if(std::abs(low.getPixelAt(x,y).getBrightness()-high.getPixelAt(x,y).getBrightness())>.08f)++changed;
     need(changed>20,"1416 selected Print B/W preview must visibly change during drag");need(p.recording().snapshot()==audio,"1416 B/W drag must defer audio rendering");
-    amount->onDragEnd();wait([&]{auto s=p.recording().snapshot();return s&&!p.recording().isBusy()&&s->edits.size()==1&&std::abs(s->edits[0].amount-.8f)<.0001f&&!(bool)view->getProperties()["previewActive"];},"1416 final B/W render and preview retirement");
+    auto* apply=dynamic_cast<juce::Button*>(find(*editor,"imagePrint"));
+    need(apply!=nullptr,"explicit Print entry");
+    auto applyDraft=[&]{
+        wait([&]{return apply->isVisible()&&image->conversionReady();},"explicit Print available for staged edit");
+        apply->onClick();
+    };
+    amount->onDragEnd();need(p.recording().snapshot()==audio,"release preserves old audio");applyDraft();wait([&]{auto s=p.recording().snapshot();return s&&!p.recording().isBusy()&&s->edits.size()==1&&std::abs(s->edits[0].amount-.8f)<.0001f&&!(bool)view->getProperties()["previewActive"];},"1416 final B/W render and preview retirement");
     // 1.4.18: real resize gestures, shared by realtime, ARA and standalone.
     auto paintBounds=[&]{view->createComponentSnapshot(view->getLocalBounds());auto& props=view->getProperties();return juce::Rectangle<float>((float)props["selectedX"],(float)props["selectedY"],(float)props["selectedW"],(float)props["selectedH"]);};
     auto renderFinished=[&]{auto s=p.recording().snapshot();return s&&!p.recording().isBusy()&&s->edits.size()==1&&!(bool)view->getProperties()["previewActive"];};
@@ -75,7 +82,9 @@ inline void ui(SpectrumTagAudioProcessor& p,const juce::File& dir,const std::fun
         p.recording().setEdits({fixture});wait(renderFinished,"1418 native-aspect fixture");
         click(b.getCentreX(),b.getCentreY());}
     for(int mode:{0,4}){
-        scale->setSelectedId(mode==0?1:5,juce::sendNotificationSync);
+        if(scale->getSelectedId()!=(mode==0?1:5)){
+            scale->setSelectedId(mode==0?1:5,juce::sendNotificationSync);applyDraft();
+        }
         wait([&]{return renderFinished()&&p.recording().snapshot()->edits.front().scaleMode==mode;},"1418 resize frequency mode ready");
         for(float factor:{.6f,1.3f}){
             const auto before=*p.recording().edits();const auto beforeAudio=p.recording().snapshot();
@@ -95,7 +104,7 @@ inline void ui(SpectrumTagAudioProcessor& p,const juce::File& dir,const std::fun
             need(std::abs(resized.getHeight()/anchor.getHeight()-factor)<.015f,"1418 corner must shrink AND enlarge Print");
             need(p.recording().snapshot()==beforeAudio&&sameGeometry(p.recording().edits()->front(),old),"1418 drag must not render audio or mutate desired Print");
             need(!hostSeeks||hostSeeks()==oldSeeks,"1418 resize must not seek host");
-            view->mouseUp(mouse(end));
+            view->mouseUp(mouse(end));need(p.recording().snapshot()==beforeAudio,"released resize is still a draft");applyDraft();
             wait([&]{return renderFinished()&&std::abs(p.recording().snapshot()->edits.front().duration-old.duration*factor)<1.e-5;},"1418 resize final render");
             const auto after=p.recording().snapshot()->edits.front();
             need(std::abs(after.start-old.start)<1.e-6&&std::abs(after.high-old.high)<1.e-5&&std::abs(after.low-old.low)>1.e-4,"1418 resize changes duration and frequency coverage, not anchor");
