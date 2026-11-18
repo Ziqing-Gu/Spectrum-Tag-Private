@@ -432,8 +432,9 @@ SpectrumTagAudioProcessor::SpectrumTagAudioProcessor()
     ),
       apvts (*this, nullptr, "PARAMETERS", createParameterLayout())
 {
+    // 图片对象只存在于当前会话/工程状态里。以前这里会用偏好里“上次的图片”
+    // 给每个新实例预置一张图，导致删掉的图片在新窗口里又出现，现已移除。
     const auto preferences=spectrumtag::Preferences::read();
-    editorState.imagePath=preferences.imagePath;
     editorState.palette=preferences.palette;editorState.chinese=preferences.chineseTips;editorState.uiScale=preferences.uiScale;
     // 缓存 printTrigger 参数指针，后续复位/读值都走它。
     printTriggerParam = dynamic_cast<juce::AudioParameterBool*> (apvts.getParameter (ParameterIDs::printTrigger));
@@ -1522,6 +1523,7 @@ void SpectrumTagAudioProcessor::getStateInformation (juce::MemoryBlock& destData
     tree.setProperty("viewEnd",s.viewEnd,nullptr);tree.setProperty("viewZoom",s.viewZoom,nullptr);
     tree.setProperty("viewFollow",s.viewFollow,nullptr);tree.setProperty("viewFit",s.viewFit,nullptr);tree.setProperty("viewValid",s.viewValid,nullptr);
     tree.setProperty("selectedPrint",s.selectedPrint,nullptr);tree.setProperty("placementId",s.placementId,nullptr);
+    if(filePlayerMode)tree.setProperty("standaloneCopyOrigin",s.standaloneCopyOrigin,nullptr);
     tree.setProperty ("imgBoxWidthPx", s.imgBoxWidthPx, nullptr);
     tree.setProperty("spectrumHeightPx",s.spectrumHeightPx,nullptr);
     tree.setProperty ("imagePath",     s.imagePath,     nullptr);
@@ -1587,6 +1589,7 @@ void SpectrumTagAudioProcessor::setStateInformation (const void* data, int sizeI
         if(!std::isfinite(s.viewEnd))s.viewEnd=0;if(!std::isfinite(s.viewZoom)||s.viewZoom<=0)s.viewZoom=1;
         s.viewFollow=(bool)tree.getProperty("viewFollow",true);s.viewFit=(bool)tree.getProperty("viewFit",false);s.viewValid=(bool)tree.getProperty("viewValid",false);
         s.selectedPrint=tree.getProperty("selectedPrint").toString();s.placementId=tree.getProperty("placementId").toString();
+        if(filePlayerMode)s.standaloneCopyOrigin=tree.getProperty("standaloneCopyOrigin").toString();
         s.imagePath     = tree.getProperty ("imagePath",     s.imagePath).toString();
         s.imgRectXNorm  = (float) tree.getProperty ("imgRectXNorm",  s.imgRectXNorm);
         s.imgRectYNorm  = (float) tree.getProperty ("imgRectYNorm",  s.imgRectYNorm);
@@ -1680,9 +1683,12 @@ bool SpectrumTagAudioProcessor::triggerPrintFromAutomationInternal()
     juce::Image src = juce::ImageFileFormat::loadFrom (imgFile);
     if (! src.isValid()) return false;
 
-    const spectrumtag::image::Settings conversion {
-        (int)*apvts.getRawParameterValue(ParameterIDs::imageMode),
-        *apvts.getRawParameterValue(ParameterIDs::imageAmount) };
+    spectrumtag::image::Settings conversion;
+    conversion.mode = (int)*apvts.getRawParameterValue(ParameterIDs::imageMode);
+    conversion.amount = *apvts.getRawParameterValue(ParameterIDs::imageAmount);
+    conversion.grayscale = *apvts.getRawParameterValue(ParameterIDs::imageStyle) > 0.5f;
+    conversion.contrast = *apvts.getRawParameterValue(ParameterIDs::imageGrayContrast);
+    conversion.brightness = *apvts.getRawParameterValue(ParameterIDs::imageGrayBrightness);
     auto binary = spectrumtag::image::binarize(src, conversion);
 
     // 3) 计算 rows / cols / 频率范围 / duration
@@ -1720,7 +1726,7 @@ bool SpectrumTagAudioProcessor::triggerPrintFromAutomationInternal()
     const float lowNorm  = juce::jlimit (0.0f, 1.0f, fLow  / juce::jmax (1.0f, maxHz));
     const float highNorm = juce::jlimit (0.0f, 1.0f, fHigh / juce::jmax (1.0f, maxHz));
 
-    auto mask = spectrumtag::image::rasterize(binary, rows, cols, scale, fLow, fHigh);
+    auto mask = spectrumtag::image::rasterize(binary, rows, cols, scale, fLow, fHigh, conversion.grayscale);
 
     startPrint (std::move (mask), rows, cols, lowNorm, highNorm, seconds);
     return true;
@@ -1771,11 +1777,19 @@ juce::AudioProcessorValueTreeState::ParameterLayout SpectrumTagAudioProcessor::c
         juce::NormalisableRange<float>(0.0f,1.0f,0.001f),0.5f));
     layout.add(std::make_unique<juce::AudioParameterFloat>(ParameterIDs::noiseFill,"Noise Fill",juce::NormalisableRange<float>(0.0f,1.0f,.001f),0.0f,
         juce::AudioParameterFloatAttributes().withStringFromValueFunction([](float value,int){return juce::String(juce::roundToInt(value*100))+"%";}).withValueFromStringFunction([](const juce::String& text){return juce::jlimit(0.0f,1.0f,text.getFloatValue()/100); })));
+    // 默认 22.05 kHz：显示上限下拉框暂时隐藏，新实例直接落在这个档位。
     layout.add(std::make_unique<juce::AudioParameterChoice>(ParameterIDs::frequencyRange,"Frequency range",
-        juce::StringArray{"20 kHz","24 kHz","22.05 kHz","48 kHz"},0));
+        juce::StringArray{"20 kHz","24 kHz","22.05 kHz","48 kHz"},2));
     // Appended parameter preserves every existing parameter index and the old
     // fftScale 0/1 host automation. Retired slot 2 resolves to Log; the editor shows six modes.
     layout.add(std::make_unique<juce::AudioParameterChoice>(ParameterIDs::frequencyPreset,"Frequency scale preset",juce::StringArray{"Linear / Log","insight","Log","Mel (RX)","Bark","Extended Log"},3));
+    // 新增参数一律追加在末尾，保持旧工程的自动化索引不变。
+    layout.add(std::make_unique<juce::AudioParameterChoice>(ParameterIDs::imageStyle,"Image style",
+        juce::StringArray{"Logo","Complex image"},0));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(ParameterIDs::imageGrayContrast,"Gray contrast",
+        juce::NormalisableRange<float>(0.0f,1.0f,0.001f),0.5f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(ParameterIDs::imageGrayBrightness,"Gray brightness",
+        juce::NormalisableRange<float>(0.0f,1.0f,0.001f),0.5f));
     return layout;
 }
 
@@ -1786,10 +1800,12 @@ juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 }
 namespace {
 bool sameEditor(const SpectrumTagAudioProcessor::EditorState& a,const SpectrumTagAudioProcessor::EditorState& b){
-    return a.imagePath==b.imagePath&&a.palette==b.palette&&a.imageVisible==b.imageVisible&&a.chinese==b.chinese&&a.uiScale==b.uiScale
+    return a.standaloneDraft.has_value()==b.standaloneDraft.has_value()
+        &&(!a.standaloneDraft||spectrumtag::sameEdit(*a.standaloneDraft,*b.standaloneDraft))
+        &&a.imagePath==b.imagePath&&a.palette==b.palette&&a.imageVisible==b.imageVisible&&a.chinese==b.chinese&&a.uiScale==b.uiScale
         &&a.imgRectXNorm==b.imgRectXNorm&&a.imgRectYNorm==b.imgRectYNorm&&a.imgRectWNorm==b.imgRectWNorm&&a.imgRectHNorm==b.imgRectHNorm
         &&a.viewEnd==b.viewEnd&&a.viewZoom==b.viewZoom&&a.viewFollow==b.viewFollow&&a.viewFit==b.viewFit&&a.viewValid==b.viewValid
-        &&a.selectedPrint==b.selectedPrint&&a.placementId==b.placementId&&a.spectrumHeightPx==b.spectrumHeightPx;
+        &&a.selectedPrint==b.selectedPrint&&a.retainHiddenParameters==b.retainHiddenParameters&&a.standaloneCopyOrigin==b.standaloneCopyOrigin&&a.placementId==b.placementId&&a.spectrumHeightPx==b.spectrumHeightPx;
 }
 }
 SpectrumTagAudioProcessor::UserState SpectrumTagAudioProcessor::captureUserState() const {
@@ -1843,7 +1859,7 @@ void SpectrumTagAudioProcessor::clearARA(){
     if(auto* view=getEditorView<spectrumtag::ara::View>();view&&view->loaded){
         auto before=captureUserState();before.ara=std::make_shared<const spectrumtag::ara::ViewState>(view->captureState());
         view->clear();cancelPrint();clearSpectrumHistory();
-        auto state=getEditorState();state.selectedPrint={};state.placementId={};state.viewValid=false;state.viewFit=true;setEditorState(state);stateRevision.fetch_add(1);
+        auto state=getEditorState();state.selectedPrint={};state.placementId={};state.standaloneCopyOrigin={};state.viewValid=false;state.viewFit=true;setEditorState(state);stateRevision.fetch_add(1);
         auto after=captureUserState();after.ara=std::make_shared<const spectrumtag::ara::ViewState>(view->captureState());
         before.document.source.reset();after.document.source.reset();commitUserChange(std::move(before),std::move(after),true);
     }
@@ -1895,7 +1911,7 @@ void SpectrumTagAudioProcessor::pollARA(){
         if(contextChanged){
             if(araHistoryKey.isNotEmpty())araHistory[araHistoryKey]={std::move(undoChanges),std::move(redoChanges)};
             araHistoryKey=view->key;auto& history=araHistory[araHistoryKey];undoChanges=history.undo;redoChanges=history.redo;araSelectionRevision=view->selectionRevision;
-            auto state=getEditorState();state.selectedPrint={};state.placementId={};state.viewValid=false;state.viewFollow=false;state.viewFit=true;setEditorState(state);stateRevision.fetch_add(1);
+            auto state=getEditorState();state.selectedPrint={};state.placementId={};state.standaloneCopyOrigin={};state.viewValid=false;state.viewFollow=false;state.viewFit=true;setEditorState(state);stateRevision.fetch_add(1);
         }
     }
 #endif

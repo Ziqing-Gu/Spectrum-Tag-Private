@@ -1,3 +1,4 @@
+#include <map>
 #include "shared/PrintPreview.h"
 #include "shared/TimeScale.h"
 #include "shared/PlatformFonts.h"
@@ -6,6 +7,7 @@
 #include "shared/ImageMask.h"
 #include "PluginProcessor.h"
 #include <cmath>
+#include <limits>
 
 // ============================================================================
 //  SpectrumTag - Editor 实现（Phase 2 ~ 6 完整版）
@@ -41,6 +43,17 @@ const juce::Colour kSpectrogramBgColour { 0xff000000 };
     const juce::Colour kPianoBlackKey  { 0xff202020 };
     const juce::Colour kAxisColour     { 0xff9a9a9a };
     const juce::Colour kAxisBgColour   { 0xff141517 };
+    const juce::Colour kButtonBg       { 0xff23282b };
+    const juce::Colour kButtonText     { 0xfff2f2f2 };
+    const juce::Colour kProgressTrack  { 0xff2b3033 };
+
+    inline bool containsWideCharacters (const juce::String& text)
+    {
+        for (int i = 0; i < text.length(); ++i)
+            if ((juce::juce_wchar) text[i] >= 0x2e80)
+                return true;
+        return false;
+    }
 
     constexpr int kFreqAxisWidth = 70;   // 左侧频率刻度宽度（mel 模式包含钢琴键）
     constexpr int kPianoWidth    = 28;   // mel 模式下钢琴键宽度
@@ -64,6 +77,10 @@ SpectrumTagLookAndFeel::SpectrumTagLookAndFeel()
         BinaryData::BasementGrotesqueBlack_v1_202_otf,
         BinaryData::BasementGrotesqueBlack_v1_202_otfSize);
 
+    // 解析一次并缓存：getTypefaceForFont 之后可能成为全局默认，
+    // 在内部再构造 Font 会重新进入本函数（栈溢出）。
+    chineseTypeface = spectrumtag::ui::chineseTypeface();
+
     setColour (juce::Label::textColourId,           kTextWhite);
     setColour (juce::Slider::backgroundColourId,    juce::Colours::transparentBlack);
     setColour (juce::Slider::trackColourId,         kSliderTrack);
@@ -78,12 +95,40 @@ SpectrumTagLookAndFeel::SpectrumTagLookAndFeel()
     setColour (juce::PopupMenu::highlightedTextColourId, juce::Colours::black);
     setColour (juce::ToggleButton::textColourId,    kTextWhite);
     setColour (juce::ToggleButton::tickColourId,    kTextWhite);
+
+    // 扁平按钮与进度条：与深色面板同一套语言，避免 JUCE 默认渐变外观。
+    setColour (juce::TextButton::buttonColourId,    kButtonBg);
+    setColour (juce::TextButton::buttonOnColourId,  kPrintBg);
+    setColour (juce::TextButton::textColourOffId,   kButtonText);
+    setColour (juce::TextButton::textColourOnId,    kPrintText);
+    setColour (juce::Slider::textBoxBackgroundColourId, kComboBg);
+    setColour (juce::Slider::textBoxTextColourId,   juce::Colours::black);
+    setColour (juce::Slider::textBoxOutlineColourId, kComboBorder);
+    setColour (juce::Slider::textBoxHighlightColourId, juce::Colour (0xffc8c8c8));
+    setColour (juce::ProgressBar::backgroundColourId, kProgressTrack);
+    setColour (juce::ProgressBar::foregroundColourId, kTextWhite);
 }
 
 juce::Typeface::Ptr SpectrumTagLookAndFeel::getTypefaceForFont (const juce::Font&)
 {
-    if(chinese)return juce::Font(juce::FontOptions(spectrumtag::ui::chineseFontName(),18.0f,juce::Font::plain)).getTypefacePtr();
+    // 直接返回缓存字体：本对象可能是全局默认 LookAndFeel，
+    // 若在此构造 Font 并解析字形会重新进入本函数。
+    if (chinese && chineseTypeface != nullptr) return chineseTypeface;
     return typeface;
+}
+
+juce::Font SpectrumTagLookAndFeel::getUiFont (float height) const
+{
+    if (chinese)
+        return spectrumtag::ui::chineseFont (height);
+    return juce::Font (typeface).withHeight (height);
+}
+
+juce::Font SpectrumTagLookAndFeel::getPopupMenuFont()
+{
+    if (chinese)
+        return spectrumtag::ui::chineseFont (15.0f);
+    return juce::Font (typeface).withHeight (15.0f);
 }
 
 void SpectrumTagLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int width, int height,
@@ -129,7 +174,9 @@ void SpectrumTagLookAndFeel::drawComboBox (juce::Graphics& g, int width, int hei
 
 juce::Font SpectrumTagLookAndFeel::getComboBoxFont (juce::ComboBox& box)
 {
-    return (chinese?juce::Font(juce::FontOptions(spectrumtag::ui::chineseFontName(),15.0f,juce::Font::plain)):juce::Font(typeface)).withHeight(juce::jmin(15.0f,box.getHeight()*.7f));
+    const float height = juce::jmin (15.0f, box.getHeight() * 0.7f);
+    if (chinese) return spectrumtag::ui::chineseFont (height);
+    return juce::Font (typeface).withHeight (height);
 }
 
 void SpectrumTagLookAndFeel::positionComboBoxText (juce::ComboBox& box, juce::Label& label)
@@ -154,6 +201,273 @@ void SpectrumTagLookAndFeel::drawToggleButton (juce::Graphics& g, juce::ToggleBu
         g.drawEllipse (dot.reduced (1.0f), 1.5f);
 }
 
+// ----------------------------------------------------------------------------
+//  TextButton：与工具栏圆角色块一致，默认不再使用 JUCE 的渐变/描边外观。
+//  "spectrumTagStyle"：primary（白底黑字，主操作）/ ghost（无底色无描边，纯文字入口）
+//  / outline（只有描边、不填充，填充色即父组件底色，工具按钮用）
+// ----------------------------------------------------------------------------
+void SpectrumTagLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& button,
+                                                   const juce::Colour& backgroundColour,
+                                                   bool isOver, bool isDown)
+{
+    const auto style   = button.getProperties()["spectrumTagStyle"].toString();
+    const bool primary = style == "primary";
+    const bool ghost   = style == "ghost";
+
+    auto bounds = button.getLocalBounds().toFloat().reduced (0.5f);
+    const float radius = juce::jlimit (5.0f, 14.0f, bounds.getHeight() * 0.12f);
+
+    if (ghost)
+    {
+        if (isOver || isDown)
+        {
+            g.setColour (juce::Colours::white.withAlpha (isDown ? 0.10f : 0.06f));
+            g.fillRoundedRectangle (bounds, radius);
+        }
+        return;
+    }
+
+    //   "outline"：只有描边、不填充，底色透出父组件背景。
+    //   语言切换 / 导出诊断 / 音频设备三个工具按钮统一用它。
+    if (style == "outline")
+    {
+        if (isOver || isDown)
+        {
+            g.setColour (juce::Colours::white.withAlpha (isDown ? 0.10f : 0.06f));
+            g.fillRoundedRectangle (bounds, radius);
+        }
+        const float alpha = !button.isEnabled() ? 0.12f : ((isOver || isDown) ? 0.42f : 0.26f);
+        g.setColour (juce::Colours::white.withAlpha (alpha));
+        g.drawRoundedRectangle (bounds, radius, 1.0f);
+        return;
+    }
+
+    if (style == "round")
+    {
+        // 圆形主按钮（右下角导出），沿用原 Print 圆按钮的白底视觉。
+        const float diameter = juce::jmin (bounds.getWidth(), bounds.getHeight());
+        juce::Rectangle<float> circle (bounds.getCentreX() - diameter * 0.5f,
+                                       bounds.getCentreY() - diameter * 0.5f,
+                                       diameter, diameter);
+        juce::Colour fill = juce::Colour (0xfff5f5f5);
+        if (! button.isEnabled())   fill = fill.withMultipliedAlpha (0.40f);
+        else if (isDown)            fill = juce::Colour (0xffd6d6d6);
+        else if (isOver)            fill = juce::Colours::white;
+        g.setColour (fill);
+        g.fillEllipse (circle);
+        return;
+    }
+
+    juce::Colour fill = primary ? juce::Colour (0xfff5f5f5) : backgroundColour;
+    if (! button.isEnabled())
+        fill = fill.withMultipliedAlpha (0.40f);
+    else if (isDown)
+        fill = primary ? juce::Colour (0xffd6d6d6) : fill.brighter (0.16f);
+    else if (isOver)
+        fill = primary ? juce::Colours::white : fill.brighter (0.10f);
+
+    g.setColour (fill);
+    g.fillRoundedRectangle (bounds, radius);
+
+    if (! primary)
+    {
+        g.setColour (juce::Colours::white.withAlpha (button.isEnabled() ? 0.08f : 0.04f));
+        g.drawRoundedRectangle (bounds, radius, 1.0f);
+    }
+}
+
+void SpectrumTagLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& button,
+                                             bool isOver, bool)
+{
+    const auto style   = button.getProperties()["spectrumTagStyle"].toString();
+    const bool primary = style == "primary";
+    const bool ghost   = style == "ghost";
+    const bool round   = style == "round";
+    const bool outline = style == "outline";
+
+    auto colour = button.findColour (button.getToggleState()
+                                         ? juce::TextButton::textColourOnId
+                                         : juce::TextButton::textColourOffId);
+
+    if ((primary || round) && ! button.getToggleState())
+        colour = kPrintText;
+    else if (ghost || outline)
+        colour = (isOver && button.isEnabled()) ? kTextWhite : kTextSub;
+
+    if (! button.isEnabled())
+        colour = colour.withMultipliedAlpha (0.45f);
+
+    g.setColour (colour);
+    g.setFont (getTextButtonFont (button, button.getHeight()));
+    g.drawFittedText (button.getButtonText(), button.getLocalBounds().reduced (5, 1),
+                      juce::Justification::centred, 1, 0.78f);
+}
+
+juce::Font SpectrumTagLookAndFeel::getTextButtonFont (juce::TextButton& button, int buttonHeight)
+{
+    // 大按钮（如右下角 128px 的导出按钮）使用成比例的大字号，普通工具栏按钮保持小字。
+    const float height = buttonHeight > 60 ? juce::jlimit (20.0f, 36.0f, (float) buttonHeight * 0.28f)
+                                           : juce::jlimit (11.0f, 15.0f, (float) buttonHeight * 0.52f);
+
+    if (chinese || containsWideCharacters (button.getButtonText()))
+        return spectrumtag::ui::chineseFont (height);
+
+    return juce::Font (typeface).withHeight (height);
+}
+
+juce::Label* SpectrumTagLookAndFeel::createSliderTextBox (juce::Slider& slider)
+{
+    auto* label = LookAndFeel_V4::createSliderTextBox (slider);
+
+    // 与 ComboBox 相同的浅灰数值块，替换 JUCE 默认的深色描边块。
+    label->setColour (juce::Label::backgroundColourId, kComboBg);
+    label->setColour (juce::Label::textColourId, juce::Colours::black);
+    label->setColour (juce::Label::outlineColourId, kComboBorder);
+    label->setColour (juce::TextEditor::backgroundColourId, kComboBg);
+    label->setColour (juce::TextEditor::textColourId, juce::Colours::black);
+    label->setColour (juce::TextEditor::outlineColourId, kComboBorder);
+    label->setFont (getUiFont (14.0f));
+    label->setJustificationType (juce::Justification::centred);
+
+    return label;
+}
+
+void SpectrumTagLookAndFeel::drawProgressBar (juce::Graphics& g, juce::ProgressBar& bar,
+                                              int width, int height, double progress,
+                                              const juce::String& textToShow)
+{
+    const float textWidth = textToShow.isEmpty() ? 0.0f : 54.0f;
+    auto track = juce::Rectangle<float> (0.0f, 0.0f, (float) width - textWidth, (float) height)
+                     .withSizeKeepingCentre ((float) width - textWidth, 8.0f);
+
+    g.setColour (bar.findColour (juce::ProgressBar::backgroundColourId));
+    g.fillRoundedRectangle (track, 4.0f);
+
+    const auto filled = track.withWidth (track.getWidth() * (float) juce::jlimit (0.0, 1.0, progress));
+    if (filled.getWidth() > 1.0f)
+    {
+        g.setColour (bar.findColour (juce::ProgressBar::foregroundColourId));
+        g.fillRoundedRectangle (filled, 4.0f);
+    }
+
+    if (textToShow.isNotEmpty())
+    {
+        g.setColour (kTextWhite);
+        g.setFont (chinese ? spectrumtag::ui::chineseFont (14.0f)
+                           : juce::Font (typeface).withHeight (14.0f));
+        g.drawText (textToShow, width - (int) textWidth, 0, (int) textWidth, height,
+                    juce::Justification::centredRight, false);
+    }
+}
+
+// ============================================================================
+//  TransportButton / TrashButton
+// ============================================================================
+namespace {
+    void paintIconChip (juce::Graphics& g, juce::Button& button, bool isOver, bool isDown)
+    {
+        auto bounds = button.getLocalBounds().toFloat().reduced (0.5f);
+        const float radius = juce::jmin (5.0f, bounds.getHeight() * 0.3f);
+
+        auto fill = kButtonBg;
+        if (! button.isEnabled())  fill = fill.withMultipliedAlpha (0.40f);
+        else if (isDown)           fill = fill.brighter (0.16f);
+        else if (isOver)           fill = fill.brighter (0.10f);
+
+        g.setColour (fill);
+        g.fillRoundedRectangle (bounds, radius);
+        g.setColour (juce::Colours::white.withAlpha (button.isEnabled() ? 0.08f : 0.04f));
+        g.drawRoundedRectangle (bounds, radius, 1.0f);
+    }
+
+    juce::Colour iconColour (const juce::Button& button)
+    {
+        return juce::Colours::white.withAlpha (button.isEnabled() ? 1.0f : 0.35f);
+    }
+}
+
+TransportButton::TransportButton() : juce::Button ("Play / Pause")
+{
+    setComponentID ("transportPlay");
+}
+
+void TransportButton::paintButton (juce::Graphics& g, bool isOver, bool isDown)
+{
+    // 独立版播放按钮不带底框边框，仅绘制图标，悬停/按下用透明度反馈。
+    auto area = getLocalBounds().toFloat();
+    const float iconSize = juce::jmin (area.getHeight() * 0.62f, area.getWidth() * 0.58f);
+    auto icon = juce::Rectangle<float> (iconSize, iconSize).withCentre (area.getCentre());
+
+    const float alpha = isEnabled() ? (isDown ? 0.75f : isOver ? 1.0f : 0.9f) : 0.35f;
+    g.setColour (juce::Colours::white.withAlpha (alpha));
+
+    if (playing)
+    {
+        const float barW = icon.getWidth() * 0.28f;
+        const float gap = icon.getWidth() * 0.2f;
+        const float total = barW * 2.0f + gap;
+        const float x0 = icon.getCentreX() - total * 0.5f;
+        g.fillRoundedRectangle (x0, icon.getY(), barW, icon.getHeight(), 1.2f);
+        g.fillRoundedRectangle (x0 + barW + gap, icon.getY(), barW, icon.getHeight(), 1.2f);
+    }
+    else
+    {
+        // Slightly inset on the left so the triangle looks optically centred.
+        auto triangle = icon.reduced (icon.getWidth() * 0.08f, 0.0f);
+        juce::Path path;
+        path.addTriangle (triangle.getX(), triangle.getY(),
+                          triangle.getX(), triangle.getBottom(),
+                          triangle.getRight(), triangle.getCentreY());
+        g.fillPath (path);
+    }
+}
+
+TrashButton::TrashButton() : juce::Button ("Clear")
+{
+    setComponentID ("trashClear");
+}
+
+void TrashButton::paintButton (juce::Graphics& g, bool isOver, bool isDown)
+{
+    paintIconChip (g, *this, isOver, isDown);
+
+    auto area = getLocalBounds().toFloat();
+    const float size = juce::jmin (area.getHeight() * 0.52f, area.getWidth() * 0.42f);
+    auto icon = juce::Rectangle<float> (size * 0.82f, size).withCentre (area.getCentre());
+
+    g.setColour (iconColour (*this));
+    const float stroke = 1.5f;
+
+    // Lid + handle.
+    const float lidY = icon.getY() + icon.getHeight() * 0.20f;
+    g.drawLine (icon.getX(), lidY, icon.getRight(), lidY, stroke);
+    g.drawLine (icon.getX() + icon.getWidth() * 0.34f, lidY - icon.getHeight() * 0.12f,
+                icon.getX() + icon.getWidth() * 0.66f, lidY - icon.getHeight() * 0.12f, stroke);
+    g.drawLine (icon.getX() + icon.getWidth() * 0.34f, lidY - icon.getHeight() * 0.12f,
+                icon.getX() + icon.getWidth() * 0.34f, lidY, stroke);
+    g.drawLine (icon.getX() + icon.getWidth() * 0.66f, lidY - icon.getHeight() * 0.12f,
+                icon.getX() + icon.getWidth() * 0.66f, lidY, stroke);
+
+    // Body.
+    const float top = lidY + stroke;
+    const float bottom = icon.getBottom() - icon.getHeight() * 0.04f;
+    const float inset = icon.getWidth() * 0.14f;
+    juce::Path body;
+    body.startNewSubPath (icon.getX() + inset, top);
+    body.lineTo (icon.getX() + inset * 1.5f, bottom);
+    body.lineTo (icon.getRight() - inset * 1.5f, bottom);
+    body.lineTo (icon.getRight() - inset, top);
+    g.strokePath (body, juce::PathStrokeType (stroke));
+
+    // Two ribs.
+    const float ribTop = top + (bottom - top) * 0.24f;
+    const float ribBottom = bottom - (bottom - top) * 0.18f;
+    g.drawLine (icon.getCentreX() - icon.getWidth() * 0.16f, ribTop,
+                icon.getCentreX() - icon.getWidth() * 0.16f, ribBottom, stroke);
+    g.drawLine (icon.getCentreX() + icon.getWidth() * 0.16f, ribTop,
+                icon.getCentreX() + icon.getWidth() * 0.16f, ribBottom, stroke);
+}
+
 // ============================================================================
 //  RoundPrintButton
 // ============================================================================
@@ -161,11 +475,9 @@ RoundPrintButton::RoundPrintButton (const juce::String& name) : juce::Button (na
 
 void RoundPrintButton::paintButton (juce::Graphics& g, bool isOver, bool isDown)
 {
-    auto r = getLocalBounds().toFloat();
-    const float diameter = juce::jmin (r.getWidth(), r.getHeight());
-    juce::Rectangle<float> circle (r.getCentreX() - diameter * 0.5f,
-                                   r.getCentreY() - diameter * 0.5f,
-                                   diameter, diameter);
+    // 圆角矩形 + 深色描边：明确是一个可点的按钮，而不是频谱上的一个圆点。
+    auto r = getLocalBounds().toFloat().reduced (1.0f);
+    const float corner = juce::jmin (r.getHeight(), r.getWidth()) * 0.30f;
 
     juce::Colour bg = kPrintBg;
     if (! isEnabled())  bg = juce::Colour (0xff7a7a7a);
@@ -173,10 +485,14 @@ void RoundPrintButton::paintButton (juce::Graphics& g, bool isOver, bool isDown)
     else if (isOver)    bg = juce::Colours::white;
 
     g.setColour (bg);
-    g.fillEllipse (circle);
+    g.fillRoundedRectangle (r, corner);
+
+    const float borderAlpha = isEnabled() ? (isOver || isDown ? 1.0f : 0.85f) : 0.45f;
+    g.setColour (kPrintText.withAlpha (borderAlpha));
+    g.drawRoundedRectangle (r.reduced (0.75f), corner, 1.6f);
 
     juce::Font f = (typeface != nullptr) ? juce::Font (typeface) : juce::Font();
-    f = f.withHeight (diameter * 0.32f);
+    f = f.withHeight (r.getHeight() * 0.46f * typeScale);
     g.setFont (f);
     g.setColour (kPrintText);
     g.drawText (getButtonText(), getLocalBounds(), juce::Justification::centred, false);
@@ -237,7 +553,7 @@ bool ImageBoxComponent::loadImageFromFile (const juce::File& file)
 {
     auto img = juce::ImageFileFormat::loadFrom (file);
     if (! img.isValid()) return false;
-    sourceImage = img;
+    sourceImage = img;binaryPreview={};spectrumPreview={};
     imagePath   = file.getFullPathName();
     preprocessImage();
     fitNormRectToImageAspect();   // 选框立即匹配图片宽高比
@@ -258,29 +574,73 @@ void ImageBoxComponent::fitNormRectToImageAspect(){
     normRect=clampNormRect({centre.x-width/w*.5f,centre.y-height/h*.5f,width/w,height/h});
 }
 void ImageBoxComponent::preprocessImage(){
-    binaryMask=spectrumtag::image::binarize(sourceImage,{conversionMode,conversionAmount});
-    requestedConversion=appliedConversion=0;
+    binaryMask=spectrumtag::image::binarize(sourceImage,conversion());
+    requestedConversion=appliedConversion=0;inkOverlayValid=false;
 }
-void ImageBoxComponent::setConversion(int mode,float amount,bool inverted,float ratio){
+void ImageBoxComponent::setConversion(int mode,float amount,bool inverted,float ratio,
+                                      bool grayscale,float contrast,float brightness){
     const bool changed=mode!=conversionMode||std::abs(amount-conversionAmount)>.000001f;
-    if(!changed&&inverted==previewInverted&&std::abs(ratio-previewRatio)<.000001f)return;
+    const bool switchedStyle=grayscale!=grayscaleMode;
+    const bool grayChanged=switchedStyle||std::abs(contrast-grayContrast)>.000001f
+        ||std::abs(brightness-grayBrightness)>.000001f;
+    if(!changed&&!grayChanged&&inverted==previewInverted&&std::abs(ratio-previewRatio)<.000001f)return;
     conversionMode=mode;conversionAmount=amount;previewInverted=inverted;previewRatio=ratio;
-    if(changed&&hasImage())requestedConversion=converter.request(sourceImage,mode,amount);
-    // Gain/Invert are inexpensive paint colours, not a rebuilt bitmap.
+    binaryPreview={};grayscaleMode=grayscale;grayContrast=contrast;grayBrightness=brightness;
+    if((changed||grayChanged)&&hasImage()){
+        requestedConversion=converter.request(sourceImage,conversion());
+        if(livePreviewMode&&switchedStyle){
+            // Draw the newly chosen style on the first paint while the full mask is prepared.
+            const float scale=juce::jmin(1.f,256.f/juce::jmax(sourceImage.getWidth(),sourceImage.getHeight()));
+            const auto thumb=sourceImage.rescaled(juce::jmax(1,juce::roundToInt(sourceImage.getWidth()*scale)),
+                juce::jmax(1,juce::roundToInt(sourceImage.getHeight()*scale)),juce::Graphics::lowResamplingQuality);
+            binaryMask=spectrumtag::image::binarize(thumb,conversion());
+        }
+    }
+    // Gain/Invert 只影响墨迹的 alpha 与取反，重建一张小尺寸覆盖层即可。
+    inkOverlayValid=false;
     repaint();
 }
 bool ImageBoxComponent::refreshConversion(){
     const auto result=converter.result();
     if(result&&requestedConversion!=0&&result->generation>appliedConversion&&result->generation<=requestedConversion
-        &&result->source==sourceImage&&result->mode==conversionMode){
-        binaryMask=result->mask;appliedConversion=result->generation;repaint();return true;
+        &&result->source==sourceImage&&(result->settings==conversion()
+            ||(livePreviewMode&&result->settings.grayscale==grayscaleMode))){
+        binaryMask=result->mask;binaryPreview={};appliedConversion=result->generation;inkOverlayValid=false;repaint();return true;
     }
     return false;
 }
+// 状态1 的外观：把二值掩模转成一层“打印墨迹”。受影响的像素压暗下面的频谱，
+// 其余像素完全透明；覆盖层按长边 384 采样，大图也不会在绘制线程上做全尺寸循环。
+void ImageBoxComponent::rebuildInkOverlay(){
+    inkOverlayValid=true;inkOverlay={};
+    const int maskW=binaryMask.getWidth(),maskH=binaryMask.getHeight();
+    if(maskW<1||maskH<1)return;
+    const float scale=juce::jmin(1.0f,384.0f/(float)juce::jmax(maskW,maskH));
+    const int w=juce::jmax(1,juce::roundToInt(maskW*scale)),h=juce::jmax(1,juce::roundToInt(maskH*scale));
+    // 保留音量越低，墨迹越接近纯黑；留一点透视，方便看到被压暗的频谱。
+    const float ink=juce::jlimit(0.0f,1.0f,1.0f-std::sqrt(juce::jlimit(0.0f,1.0f,previewRatio)));
+    juce::Image overlay(juce::Image::ARGB,w,h,true);
+    juce::Image::BitmapData src(binaryMask,juce::Image::BitmapData::readOnly),dst(overlay,juce::Image::BitmapData::writeOnly);
+    for(int y=0;y<h;++y){
+        const int sy=juce::jlimit(0,maskH-1,(int)((y+.5f)*maskH/h));
+        for(int x=0;x<w;++x){
+            const int sx=juce::jlimit(0,maskW-1,(int)((x+.5f)*maskW/w));
+            const auto maskAlpha=src.getPixelColour(sx,sy).getAlpha();
+            // 二值掩模只有 0/1；灰度掩模的 alpha 就是每个像素的衰减强度。
+            const float strength=grayscaleMode
+                ?(previewInverted?1.0f-maskAlpha/255.0f:maskAlpha/255.0f)
+                :((maskAlpha>128)!=previewInverted?1.0f:0.0f);
+            // 强度 1 必须完全扣净：这里不再保留透视，纯黑直接盖成黑。
+            if(strength>0.0f)
+                dst.setPixelColour(x,y,juce::Colours::black.withAlpha(juce::jlimit(0.0f,1.0f,ink*strength)));
+        }
+    }
+    inkOverlay=std::move(overlay);
+}
 std::vector<float> ImageBoxComponent::generateMask(int rows,int cols,int scale,float low,float high,bool completedPreview) const
 {
-    const auto mask=(completedPreview||conversionReady())?binaryMask:spectrumtag::image::binarize(sourceImage,{conversionMode,conversionAmount});
-    return spectrumtag::image::rasterize(mask,rows,cols,scale,low,high);
+    const auto mask=(completedPreview||conversionReady())?binaryMask:spectrumtag::image::binarize(sourceImage,conversion());
+    return spectrumtag::image::rasterize(mask,rows,cols,scale,low,high,grayscaleMode);
 }
 
 juce::Rectangle<int> ImageBoxComponent::getResizeHandle() const
@@ -307,10 +667,29 @@ void ImageBoxComponent::mouseMove (const juce::MouseEvent& e)
 void ImageBoxComponent::mouseDown(const juce::MouseEvent& e){
     if(!e.mods.isLeftButtonDown())return;
     if(onGestureStart)onGestureStart();dragMode=hitTest(e.getPosition());dragStartPos=e.getPosition()+getPosition();dragStartNormRect=normRect;
+    // Ctrl+拖动：原对象留在原位变成 Print，拖走的是它的副本。
+    duplicatePending=!livePreviewMode&&e.mods.isCtrlDown()&&hasImage();
 }
 void ImageBoxComponent::mouseDrag(const juce::MouseEvent& e){
+    if(externalDrag)return;  // 这一手势已由频谱视图转发，避免同一次拖动被应用两次
+    dragToParentPoint(e.getPosition()+getPosition());
+}
+void ImageBoxComponent::dragToParentPoint(juce::Point<int> parentPoint){
     if(dragMode==DragMode::None||contentBounds.isEmpty())return;
-    const auto delta=e.getPosition()+getPosition()-dragStartPos;
+    if(duplicatePending){
+        // 越过阈值才复制，避免 Ctrl+单击的抖动多出一个对象。
+        if((parentPoint-dragStartPos).getDistanceFromOrigin()<3.f)return;
+        duplicatePending=false;
+        const auto rect=dragStartNormRect;
+        const bool resize=dragMode==DragMode::ResizeBR;
+        if(onDuplicateDrag){
+            onDuplicateDrag();
+            // 副本摆回手势开始时的矩形，再按同一累计位移继续拖动。
+            if(hasImage()){setPrintBounds(rect);dragStartNormRect=rect;dragMode=resize?DragMode::ResizeBR:DragMode::Move;}
+        }
+    }
+    const auto delta=parentPoint-dragStartPos;
+    if(livePreviewMode&&delta.getDistanceFromOrigin()<3.f&&normRect==dragStartNormRect)return;
     auto next=dragStartNormRect;
     if(dragMode==DragMode::Move)next.setPosition(next.getX()+(float)delta.x/contentBounds.getWidth(),next.getY()+(float)delta.y/contentBounds.getHeight());
     else {
@@ -319,16 +698,40 @@ void ImageBoxComponent::mouseDrag(const juce::MouseEvent& e){
         const float height=juce::jmin(newHeight,juce::jmin(contentBounds.getHeight()*.98f,contentBounds.getWidth()*.98f/ratio));
         next.setSize(height*ratio/contentBounds.getWidth(),height/contentBounds.getHeight());
     }
-    normRect=clampNormRect(next);resizedFromNorm();if(onChanged)onChanged();
+    next=clampNormRect(next);
+    if(livePreviewMode&&next==normRect)return;
+    normRect=next;resizedFromNorm();if(onChanged)onChanged();
 }
-void ImageBoxComponent::mouseUp(const juce::MouseEvent&){dragMode=DragMode::None;if(onGestureEnd)onGestureEnd();}
+// ---- 由父视图接手的手势（已打印对象被拖动后立刻退回未打印态）----
+void ImageBoxComponent::beginExternalDrag(juce::Point<int> parentPoint,bool resizeAtHandle){
+    externalDrag=true;
+    dragMode=resizeAtHandle?DragMode::ResizeBR:DragMode::Move;
+    dragStartPos=parentPoint;dragStartNormRect=normRect;
+}
+void ImageBoxComponent::continueExternalDrag(juce::Point<int> parentPoint){dragToParentPoint(parentPoint);}
+void ImageBoxComponent::endExternalDrag(){
+    if(!externalDrag)return;
+    externalDrag=false;dragMode=DragMode::None;
+    if(onGestureEnd)onGestureEnd();
+}
+void ImageBoxComponent::mouseUp(const juce::MouseEvent& e){
+    if(livePreviewMode&&dragMode==DragMode::None&&!externalDrag)return;
+    const bool wasEmpty=!hasImage();
+    const bool moved=(e.getPosition()+getPosition()-dragStartPos).getDistanceFromOrigin()>=4.f;
+    if(externalDrag){externalDrag=false;dragMode=DragMode::None;if(onGestureEnd)onGestureEnd();return;}
+    dragMode=DragMode::None;
+    if(onGestureEnd)onGestureEnd();
+    // The empty box is the "drop a picture" guide; a plain click opens the
+    // chooser instead of doing nothing. Dragging still repositions the guide.
+    if(!livePreviewMode&&wasEmpty&&!moved&&e.mods.isLeftButtonDown())openFileChooser();
+}
 void ImageBoxComponent::mouseDoubleClick(const juce::MouseEvent& e){if(e.mods.isLeftButtonDown())openFileChooser();}
 
 void ImageBoxComponent::openFileChooser()
 {
     fileChooser = std::make_unique<juce::FileChooser> (
         chinese?juce::String::fromUTF8("选择图片"):juce::String("Choose picture"),
-        juce::File::getSpecialLocation (juce::File::userPicturesDirectory),
+        livePreviewMode?spectrumtag::Preferences::imageChooserDirectory():juce::File::getSpecialLocation(juce::File::userPicturesDirectory),
         "*.png;*.jpg;*.jpeg;*.bmp;*.gif");
 
     fileChooser->launchAsync (juce::FileBrowserComponent::openMode
@@ -336,41 +739,91 @@ void ImageBoxComponent::openFileChooser()
         [this] (const juce::FileChooser& fc)
         {
             auto file = fc.getResult();
-            if (file.existsAsFile())
-            {
-                if(onFileLoadStart)onFileLoadStart();
-                if (loadImageFromFile (file))
-                {
-                    if (onImagePicked) onImagePicked (file);
-                }
-            }
+            // 是否允许导入（未加载音频时拒绝）、是否需要先打印上一张由编辑器决定。
+            if (file.existsAsFile() && onImageRequested) onImageRequested (file);
         });
+}
+
+void ImageBoxComponent::drawConvertedArtwork(juce::Graphics& g,juce::Rectangle<float> bounds)
+{
+    if(!binaryMask.isValid())return;
+    if(grayscaleMode){
+        if(!binaryPreview.isValid())
+            binaryPreview=spectrumtag::image::preview(binaryMask,previewInverted,previewRatio,true);
+        g.drawImage(binaryPreview,bounds,juce::RectanglePlacement::stretchToFit);
+        return;
+    }
+    // Preserve the original Logo painter and its antialiased edge sampling.
+    const auto shade=(juce::uint8)juce::roundToInt(255*std::sqrt(juce::jlimit(0.0f,1.0f,previewRatio)));
+    const juce::Colour dim(shade,shade,shade);
+    g.setColour(previewInverted?dim:juce::Colours::white);g.fillRect(bounds);
+    g.setColour(previewInverted?juce::Colours::white:dim);
+    g.drawImage(binaryMask,bounds,juce::RectanglePlacement::centred,true);
 }
 
 void ImageBoxComponent::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds().toFloat();
-
-    // 半透明灰底
-    g.setColour (kImgBoxBg.withAlpha (0.55f));
-    g.fillRect (r);
-
-    if(hasImage()&&binaryMask.isValid()){
-        const auto shade=(juce::uint8)juce::roundToInt(255*std::sqrt(juce::jlimit(0.0f,1.0f,previewRatio)));
-        const juce::Colour dim(shade,shade,shade);
-        g.setColour(previewInverted?dim:juce::Colours::white);g.fillRect(r);
-        g.setColour(previewInverted?juce::Colours::white:dim);
-        g.drawImage(binaryMask,r,juce::RectanglePlacement::centred,true);
+    if(livePreviewMode&&hasImage()&&binaryMask.isValid()){
+        if(spectrumPreview.isValid())g.drawImage(spectrumPreview,r,juce::RectanglePlacement::stretchToFit);
+        else drawConvertedArtwork(g,r);
+    }
+    else if(hasImage()&&binaryMask.isValid()){
+        // 模拟“已经打印进频谱”的样子：不铺白底，墨迹把下面的频谱压暗，
+        // 非墨迹区域几乎全透明，原频谱直接透出来。
+        // 极淡的白色底衬只在深色频谱上起作用，保证图形仍然可辨。
+        g.setColour(juce::Colours::white.withAlpha(0.08f));
+        g.fillRect(r);
+        if(!inkOverlayValid)rebuildInkOverlay();
+        g.setColour(juce::Colours::black);
+        g.drawImage(inkOverlay,r,juce::RectanglePlacement::stretchToFit,true);
     }
     else
     {
-        // "Choose picture" 占位
-        juce::Font f = (typeface != nullptr) ? juce::Font (typeface) : juce::Font();
-        f = f.withHeight (juce::jlimit (14.0f, 28.0f, r.getHeight() * 0.18f));
-        g.setFont (f);
+        // 空工作区：这个框就是"把图片放进来"的引导，拖入或单击/双击都可以。
+        g.setColour (kImgBoxBg.withAlpha (0.55f));
+        g.fillRect (r);
+        const float titleH = juce::jlimit (13.0f, 20.0f, r.getHeight() * 0.10f);
+        const float subH   = juce::jmax (11.0f, titleH * 0.72f);
+        const bool  roomy  = r.getHeight() >= 110.0f && r.getWidth() >= 150.0f;
+        const float icon   = juce::jlimit (18.0f, 40.0f, juce::jmin (r.getWidth(), r.getHeight()) * 0.18f);
+
+        auto content = r.reduced (10.0f, 8.0f);
+        if (roomy)
+        {
+            auto iconArea = content.removeFromTop (juce::jmin (content.getHeight() * 0.42f, icon * 1.35f));
+            auto frame = juce::Rectangle<float> (icon * 1.18f, icon).withCentre (iconArea.getCentre());
+            g.setColour (kImgBoxBlack.withAlpha (0.80f));
+            g.drawRoundedRectangle (frame.reduced (1.0f), 3.0f, 1.6f);
+            g.fillEllipse (frame.getX() + frame.getWidth() * 0.18f, frame.getY() + frame.getHeight() * 0.20f,
+                           frame.getWidth() * 0.15f, frame.getWidth() * 0.15f);
+            juce::Path hill;
+            hill.startNewSubPath (frame.getX() + frame.getWidth() * 0.12f, frame.getBottom() - frame.getHeight() * 0.16f);
+            hill.lineTo (frame.getX() + frame.getWidth() * 0.38f, frame.getY() + frame.getHeight() * 0.48f);
+            hill.lineTo (frame.getX() + frame.getWidth() * 0.56f, frame.getBottom() - frame.getHeight() * 0.30f);
+            hill.lineTo (frame.getX() + frame.getWidth() * 0.72f, frame.getY() + frame.getHeight() * 0.58f);
+            hill.lineTo (frame.getRight() - frame.getWidth() * 0.10f, frame.getBottom() - frame.getHeight() * 0.16f);
+            g.strokePath (hill, juce::PathStrokeType (1.4f));
+            content.removeFromTop (2.0f);
+        }
+
+        auto text = content.withSizeKeepingCentre (content.getWidth(),
+            juce::jmin (content.getHeight(), titleH * 1.6f + (roomy ? subH * 1.7f : 0.0f)));
+        juce::Font baseFont = (typeface != nullptr) ? juce::Font (typeface) : juce::Font();
+        g.setFont (chinese ? spectrumtag::ui::chineseFont (titleH) : baseFont.withHeight (titleH));
         g.setColour (kImgBoxBlack);
-        if(chinese)g.setFont(juce::Font(juce::FontOptions(spectrumtag::ui::chineseFontName(),20.0f,juce::Font::plain)));
-        g.drawText(chinese?juce::String::fromUTF8("双击选择图片"):juce::String("Double-click to load"),getLocalBounds(),juce::Justification::centred);
+        g.drawFittedText (chinese ? juce::String::fromUTF8 ("拖入图片") : juce::String ("Drop a picture"),
+                          text.removeFromTop (juce::jmin (text.getHeight(), titleH * 1.6f)).toNearestInt(),
+                          juce::Justification::centred, 1, 0.9f);
+        if (roomy && text.getHeight() >= subH)
+        {
+            g.setFont (chinese ? spectrumtag::ui::chineseFont (subH) : baseFont.withHeight (subH));
+            g.setColour (kImgBoxBlack.withAlpha (0.80f));
+            g.drawFittedText (chinese ? juce::String::fromUTF8 (livePreviewMode?"或双击此处选择":"或单击 / 双击此处选择")
+                                      : juce::String (livePreviewMode?"or double-click to choose":"or click / double-click to choose"),
+                              text.removeFromTop (subH * 1.7f).toNearestInt(),
+                              juce::Justification::centred, 1, 0.9f);
+        }
     }
 
     // 黑黄交错虚线边框
@@ -429,6 +882,15 @@ public:
         addAndMakeVisible(imageClip);imageClip.setInterceptsMouseClicks(false,true);imageClip.addAndMakeVisible(*imageBox);
         imageBox->addMouseListener(this,true);
         fitButton.onClick=[this]{if(onNavigation)onNavigation();resetView();};addAndMakeVisible(fitButton);
+        printImageButton.setComponentID("imagePrint");printImageButton.setTypeface(typeface);
+        printImageButton.onClick=[this]{if(onImagePrint)onImagePrint();};
+        addAndMakeVisible(printImageButton);printImageButton.setVisible(false);
+        if(p.filePlayerMode){
+            imageBox->setWantsKeyboardFocus(true);
+            cancelButton.setComponentID("cancelPrint");
+            cancelButton.onClick=[this]{if(onCancel)onCancel();};
+            addChildComponent(cancelButton);
+        }
         setPalette(p.getEditorState().palette);
     }
     ~SpectrumView() override { imageBox->removeMouseListener(this); }
@@ -446,7 +908,136 @@ public:
         view.endTime=anchor+(1.-getImageBoxX()/juce::jmax(1,contentBounds.getWidth()))*timeSpan();
         dirty=true;repaint();
     }
-    void setImageVisible(bool visible){imageBox->setVisible(visible);}
+    // 图片对象三态：Empty=没有对象（有音频时显示投放引导）/ Placing=未打印
+    // （图片可见，可拖动、可改参数）/ Printed=已打印未聚焦（只看到频谱里的挖空）
+    // / Focused=已打印且聚焦（图片 + 边框 + Delete 提示）。
+    enum class ImageStage { Empty, Placing, Printed, Focused };
+    bool timelineHasPrints() const {const auto edits=processor.recording().edits();return edits&&!edits->empty();}
+    ImageStage imageStage() const {
+        // 状态3 不显示源图，只靠“选中的打印”判定。
+        if(selectedPrint())return ImageStage::Focused;
+        if(processor.filePlayerMode&&sourcePrintId.isNotEmpty())return ImageStage::Printed;
+        if(imageBox->hasImage())return ImageStage::Placing;
+        return timelineHasPrints()?ImageStage::Printed:ImageStage::Empty;
+    }
+    // 右键是没有菜单的上下文操作，由三态决定：
+    // 状态1（未打印）→ 等同打印按钮；状态3（聚焦）→ 退回图片模式；
+    // 没有聚焦对象时 → 聚焦离点击位置最近的已打印图形（矩形最近距离）。
+    juce::Image resumePlot;
+    juce::Image captureResumePlot(){
+        // Only cache a finished raster for the exact document and visible view.
+        if(!recorded||waterfallSource!=recorded||processor.recording().snapshot()!=recorded
+           ||!waterfall.isValid()||waterfall.getBounds()!=contentBounds.withZeroOrigin()
+           ||overviewBounds.isEmpty()||waterfallScale!=scaleMode||waterfallPalette!=palette||waterfallTop!=topHz()
+           ||std::abs(waterfallEnd-view.endTime)>1.e-6||std::abs(waterfallStart-(view.endTime-timeSpan()))>1.e-6)return {};
+        juce::Image plot(juce::Image::RGB,waterfall.getWidth(),waterfall.getHeight()+overviewBounds.getHeight(),true);
+        juce::Graphics g(plot);g.drawImageAt(waterfall,0,0);
+        g.setOrigin(-overviewBounds.getX(),waterfall.getHeight()-overviewBounds.getY());paintOverview(g);
+        return plot;
+    }
+    void showResumePlot(juce::Image image){
+        resumePlot=std::move(image);
+        getProperties().set("resumePlotVisible",resumePlot.isValid());
+        repaint();
+    }
+    bool imageVisible=true;
+    juce::String sourcePrintId;
+    std::optional<spectrumtag::PrintEdit> stagedPlacement;
+    // Original FFT tiles already cover isolated Prints. For an overlap, keep the
+    // affected tiles as they sounded before this Print, including its neighbours.
+    struct PrintBackground {
+        spectrumtag::RecordingSnapshot tiles;
+        std::vector<spectrumtag::PrintEdit> neighbours;
+    };
+    std::map<juce::String,PrintBackground> printBackgrounds;
+    static bool intersectsAudio(const spectrumtag::PrintEdit& edit,double begin,double end,double sr){
+        const double spill=edit.fftSize/sr;
+        return edit.start-spill<end&&edit.start+edit.duration+spill>begin;
+    }
+    void rememberPrintBackground(const spectrumtag::PrintEdit& edit,const spectrumtag::RecordingSnapshot& before){
+        if(before.spectrum.empty())return;
+        constexpr auto size=spectrumtag::RecordingSnapshot::tileSize;
+        const auto first=juce::jlimit<int64_t>(0,(int64_t)before.spectrum.size(),(llround(edit.start*before.sampleRate)-before.origin-edit.fftSize-before.fftSize)/size);
+        const auto last=juce::jlimit<int64_t>(first,(int64_t)before.spectrum.size(),(llround((edit.start+edit.duration)*before.sampleRate)-before.origin+edit.fftSize+before.fftSize+size-1)/size);
+        if(first==last)return;
+        PrintBackground saved;
+        auto& slice=saved.tiles;
+        slice.sourceId=before.sourceId;slice.sampleRate=before.sampleRate;slice.fftSize=before.fftSize;
+        slice.origin=before.origin+first*size;slice.first=juce::jmax(before.first,slice.origin);slice.last=juce::jmin(before.last,before.origin+last*size);
+        for(const auto& other:before.edits){
+            if(!intersectsAudio(other,slice.start(),slice.end(),slice.sampleRate))continue;
+            if(other.id==edit.id)return; // These tiles already contain the layer being replaced.
+            saved.neighbours.push_back(other);
+        }
+        if(saved.neighbours.empty())return;
+        slice.spectrum.assign(before.spectrum.begin()+first,before.spectrum.begin()+last);
+        printBackgrounds[edit.id]=std::move(saved);
+    }
+    const spectrumtag::RecordingSnapshot* backgroundFor(const juce::String& id,const std::vector<spectrumtag::PrintEdit>& layers) const {
+        const auto item=printBackgrounds.find(id);
+        if(item==printBackgrounds.end())return nullptr;
+        const auto& saved=item->second;const auto& slice=saved.tiles;
+        if(slice.sourceId!=waterfallSource->sourceId||slice.fftSize!=waterfallSource->fftSize)return nullptr;
+        auto expected=saved.neighbours.begin();
+        for(const auto& e:layers){
+            if(!intersectsAudio(e,slice.start(),slice.end(),slice.sampleRate))continue;
+            if(expected==saved.neighbours.end()||!spectrumtag::sameAudioEdit(e,*expected++))return nullptr;
+        }
+        return expected==saved.neighbours.end()?&slice:nullptr;
+    }
+    void discardPlacement(){
+        if(!stagedPlacement)return;
+        stagedPlacement.reset();
+        setPreview({});
+        if(auto edit=selectedPrint())alignImageToPrint(*edit);
+    }
+    void stagePlacement(const spectrumtag::PrintEdit& edit){
+        stagedPlacement=edit;
+        setPreview(edit);
+        alignImageToPrint(edit);
+    }
+    std::function<void(bool)> onToggleImage;
+    std::function<void()> onCancel,onDismissDraft;
+    std::optional<spectrumtag::PrintEdit> renderingPrint;
+    void focusVisibleImage(){
+        if(imageVisible&&imageBox->hasImage()&&imageBox->isShowing())imageBox->grabKeyboardFocus();
+    }
+    void contextClick(juce::Point<float> point){
+        if(processor.filePlayerMode){
+            if(renderingPrint)return;
+            // A visible source always hides, regardless of where the right-click lands.
+            juce::String hit;
+            if(!imageVisible){
+                if(preview&&preview->id==selected&&editBounds(*preview).contains(point))hit=selected;
+                else if(const auto edits=processor.recording().edits())
+                    for(auto i=edits->rbegin();i!=edits->rend();++i)
+                        if(editBounds(*i).contains(point)){hit=i->id;break;}
+                if(hit.isNotEmpty()&&hit!=selected&&onSelected)onSelected(hit);
+            }
+            if(onToggleImage)onToggleImage(hit.isEmpty());
+            return;
+        }
+        // 打印交给 onPrintClicked 处理：没有真实音频时它会高亮“先加载音频”。
+        if(imageStage()==ImageStage::Placing){if(onImagePrint)onImagePrint();return;}
+        if(selectedPrint()){if(onContextRevert)onContextRevert();return;}
+        if(!recorded||recorded->empty())return;
+        juce::String nearest;float nearestDistance=std::numeric_limits<float>::max();
+        if(const auto edits=processor.recording().edits())for(const auto& e:*edits){
+            const auto editArea=editBounds(e);
+            const float dx=juce::jmax(0.f,juce::jmax(editArea.getX()-point.x,point.x-editArea.getRight()));
+            const float dy=juce::jmax(0.f,juce::jmax(editArea.getY()-point.y,point.y-editArea.getBottom()));
+            const float distance=dx*dx+dy*dy;
+            if(distance<nearestDistance){nearestDistance=distance;nearest=e.id;}
+        }
+        if(nearest.isNotEmpty()&&onSelected)onSelected(nearest);
+    }
+    // 状态切换后立刻刷新画布，而不是等下一次 tick。
+    void refreshCanvas(){refreshCanvasState();}
+    // Called when Print is refused because no real audio is loaded. Emphasise
+    // the on-canvas guidance instead of silently doing nothing.
+    void flashAudioHint(){audioHintFlashUntil=juce::Time::getMillisecondCounter()+2200;repaint(audioBannerBounds());}
+    // 退回未打印态：这次打印马上由图片接替，绘制时只挖它自己那条频带。
+    void markPrintRevealed(const juce::String& id){imageRevealId=id;}
     void refreshDeletedPrint(){
         // An in-flight raster may still refer to the deleted edit. Retire that
         // request now; paint masks the obsolete footprint until the new audio
@@ -455,8 +1046,9 @@ public:
     }
     void clearDisplay(){
         rasterEpoch=renderer.invalidate();requestedRaster=appliedRaster=0;
-        waterfall={};waterfallSource.reset();waterfallStart=waterfallEnd=0;overviewImage={};overviewSource.reset();
-        preview.reset();previewImage={};selected={};dragEdit.reset();movingPrint=false;
+        waterfall={};waterfallSource.reset();deletionRepair={};repairDesired.reset();waterfallStart=waterfallEnd=0;overviewImage={};overviewSource.reset();
+        printBackgrounds.clear();
+        preview.reset();previewImage={};selected={};dragEdit.reset();movingPrint=false;imageRevealId={};sourcePrintId={};stagedPlacement.reset();
         panActive=false;fitAfterCapture=false;recorded.reset();recordMode=processor.recording().isEnabled();
         lastClearSerial=processor.getSpectrumClearSerial();view.reset(now());fit=false;
         getProperties().set("previewActive",false);resized();dirty=true;repaint();
@@ -476,17 +1068,28 @@ public:
         fit=false;panActive=false;updateImageBounds();dirty=true;repaint();
     }
     std::function<void(const juce::String&)> onSelected;
-    std::function<void()> onDelete,onNavigation,onMoveBegin,onToggleImage;
+    std::function<void()> onDelete,onNavigation,onMoveBegin,onRequestAudio,onImagePrint,onRevertFocused,onRevertEnd,onContextRevert;
     std::function<void(float)> onWheelSpeed;
     std::function<void(const spectrumtag::PrintEdit&)> onMoveEnd;
-    void setChinese(bool value){chinese=value;imageBox->setChinese(value);fitButton.setTooltip(juce::String::fromUTF8(processor.isLoadMode()?(value?"全览：显示已加载音频事件的完整范围。":"Fit the complete range of loaded audio events."):(value?"全览：显示整个录音范围。未录音时返回实时视图。":"Fit the recorded range. Before recording, return to the live view.")));repaint();}
+    void setPrintButtonTooltip(const juce::String& text){printImageButton.setTooltip(text);}
+    void setChinese(bool value){
+        if(processor.filePlayerMode){
+            cancelButton.setButtonText(juce::String::fromUTF8(value?"取消":"Cancel"));
+            cancelButton.setTypeface(value?spectrumtag::ui::chineseTypeface():typeface);
+            cancelButton.setTypeScale(value?spectrumtag::ui::chineseScale:1.0f);
+            cancelButton.setTooltip(juce::String::fromUTF8(value?"取消本次打印，保留上一次的声音。":"Cancel this Print and keep the previous audio."));
+        }
+        chinese=value;imageBox->setChinese(value);printImageButton.setButtonText(juce::String::fromUTF8(value?"打印":"Print"));printImageButton.setTypeface(value?spectrumtag::ui::chineseTypeface():typeface);printImageButton.setTypeScale(value?spectrumtag::ui::chineseScale:1.0f);fitButton.setTooltip(juce::String::fromUTF8(processor.isLoadMode()?(value?"全览：显示已加载音频事件的完整范围。":"Fit the complete range of loaded audio events."):(value?"全览：显示整个录音范围。未录音时返回实时视图。":"Fit the recorded range. Before recording, return to the live view.")));repaint();}
     void setPreview(std::optional<spectrumtag::PrintEdit> value,bool released=false,bool anchor=false){
         const bool rebuild=!preview||!value||!spectrumtag::sameEdit(*preview,*value);
         preview=std::move(value);previewReleased=released;
         if(preview&&anchor){view.zoomX=preview->viewZoom;view.follow=false;fit=false;view.endTime=preview->start+(1.-(double)imageBox->getX()/juce::jmax(1,contentBounds.getWidth()))*timeSpan();}
         if(rebuild)previewImage={};
-        getProperties().set("previewActive",preview.has_value());dirty=true;repaint();
+        getProperties().set("previewActive",preview.has_value());refreshCanvasState();
+        if(anchor||!processor.filePlayerMode)dirty=true;
+        repaint();
     }
+    juce::Image currentPreviewImage(){ensurePreviewImage();return previewImage;}
     void releasePreview(){previewReleased=true;dirty=true;repaint();}
     void constrainNavigation(bool allowEmpty=false){
         if(!recorded||recorded->empty()||view.follow)return;
@@ -519,7 +1122,7 @@ public:
         dirty=true;
     }
     void restorePrintView(const spectrumtag::PrintEdit& e){
-        panActive=false;
+        panActive=false;dirty=true;
         view.zoomX=juce::jmax(.000001,e.viewZoom);view.follow=false;fit=false;
         // A saved zoom describes the canvas at Print time. The current host
         // rectangle (or overview height) may differ. Restore the aspect of the
@@ -534,31 +1137,53 @@ public:
         alignImageToPrint(e);
     }
     void alignImageToPrint(const spectrumtag::PrintEdit& e){
-        dirty=true;const auto b=editBounds(e).translated(-(float)contentBounds.getX(),-(float)contentBounds.getY());
+        if(!processor.filePlayerMode)dirty=true;
+        const auto b=editBounds(e).translated(-(float)contentBounds.getX(),-(float)contentBounds.getY());
         imageBox->setPrintBounds({b.getX()/contentBounds.getWidth(),b.getY()/contentBounds.getHeight(),b.getWidth()/contentBounds.getWidth(),b.getHeight()/contentBounds.getHeight()});
     }
     double imageStart() const {
         return view.endTime-baseSpan()/view.zoomX+getImageBoxX()/juce::jmax(1,contentBounds.getWidth())*baseSpan()/view.zoomX;
     }
-    juce::String selectedEdit() const {return selected;}
-    std::optional<spectrumtag::PrintEdit> selectedPrint() const {
-        auto edits=processor.recording().edits();if(edits)for(const auto& e:*edits)if(e.id==selected)return e;return {};
+    // 让图片对象的左边缘正好落在时间 t 上（Ctrl+V 在播放位置新建对象时用）。
+    void placeImageStartAt(double t){
+        if(contentBounds.getWidth()<1)return;
+        const double span=timeSpan();
+        if(span<=0)return;
+        // 播放位置不在当前视窗内时先跟过去，保证新对象可见。
+        if(t<view.endTime-span||t>view.endTime){view.follow=false;fit=false;view.endTime=t+span*.85;}
+        auto n=imageBox->getNormalisedBounds();
+        const double viewStart=view.endTime-span;
+        n.setX((float)juce::jlimit((double)-n.getWidth()+.02,0.98,(t-viewStart)/span));
+        imageBox->setPrintBounds(n);
+        dirty=true;repaint();
     }
+    juce::String selectedEdit() const {return selected;}
+    std::optional<spectrumtag::PrintEdit> findPrint(const juce::String& id) const {
+        auto edits=processor.recording().edits();if(edits)for(const auto& e:*edits)if(e.id==id)return e;return {};
+    }
+    std::optional<spectrumtag::PrintEdit> selectedPrint() const {return findPrint(selected);}
     void selectEdit(juce::String id){selected=std::move(id);repaint();}
     void removeSelected(){if(selected.isNotEmpty()){processor.recording().remove(selected);selected={};repaint();}}
     bool keyPressed(const juce::KeyPress& key) override {
-        if(key.getKeyCode()==juce::KeyPress::deleteKey&&selected.isNotEmpty()){if(onDelete)onDelete();return true;}return false;
+        if(key.getKeyCode()==juce::KeyPress::deleteKey&&(selected.isNotEmpty()||imageBox->hasImage())){if(onDelete)onDelete();return true;}return false;
     }
     void resized() override {
         auto r=getLocalBounds();statusBounds=r.removeFromBottom(20);
         overviewBounds=processor.recording().isEnabled()?r.removeFromBottom(82).withTrimmedLeft(kFreqAxisWidth):juce::Rectangle<int>();
         axisBounds=r.removeFromLeft(kFreqAxisWidth);contentBounds=r;
-        imageClip.setBounds(contentBounds);fitButton.setBounds(contentBounds.getRight()-36,contentBounds.getY()+6,30,30);fitButton.toFront(false);updateImageBounds();dirty=true;
+        imageClip.setBounds(contentBounds);fitButton.setBounds(contentBounds.getRight()-36,contentBounds.getY()+6,30,30);fitButton.toFront(false);updateImageBounds();layoutPrintImageButton();dirty=true;
     }
     void tick() {
-        if(lastClearSerial!=processor.getSpectrumClearSerial())clearDisplay();
+        if(lastClearSerial!=processor.getSpectrumClearSerial()){showResumePlot({});clearDisplay();}
         processor.drainSpectrumFrames(incoming);
         bool changed=false;
+        // 三态决定画布内容：空对象框=投放引导，未打印/聚焦=显示图片，
+        // 已打印未聚焦=只显示频谱里的挖空。没有音频时整框隐藏。
+        const bool hasImage=imageBox->hasImage();
+        if(hasImage!=lastHasImage){lastHasImage=hasImage;repaint();}
+        refreshCanvasState();
+        const bool audioLoaded=processor.hasLoadedAudio();
+        if(audioLoaded!=lastAudioLoaded){lastAudioLoaded=audioLoaded;repaint();}
         if(processor.recording().isEnabled()!=recordMode){
             recordMode=processor.recording().isEnabled();rasterEpoch=renderer.invalidate();waterfall={};waterfallSource.reset();overviewImage={};resized();changed=true;
             if(!recordMode){recorded.reset();view.reset(now());fit=false;fitAfterCapture=false;}
@@ -579,10 +1204,15 @@ public:
         wasPlaying=playing;wasArmed=armed;
         const auto desired=processor.recording().edits();
         if(observedEdits&&desired&&std::any_of(observedEdits->begin(),observedEdits->end(),[&](const auto& previous){return std::none_of(desired->begin(),desired->end(),[&](const auto& current){return previous.id==current.id;});}))refreshDeletedPrint();
+        if(observedEdits!=desired&&desired)
+            for(auto i=printBackgrounds.begin();i!=printBackgrounds.end();){
+                if(std::none_of(desired->begin(),desired->end(),[&](const auto& e){return e.id==i->first;}))i=printBackgrounds.erase(i);
+                else ++i;
+            }
         observedEdits=desired;
         const auto exists=[&](const juce::String& id){return desired&&std::any_of(desired->begin(),desired->end(),[&](const auto& e){return e.id==id;});};
         if(preview&&!exists(preview->id))setPreview({});
-        if(selected.isNotEmpty()&&!exists(selected)){selected={};dragEdit.reset();movingPrint=false;repaint();}
+        if(selected.isNotEmpty()&&!exists(selected)&&(!processor.filePlayerMode||recorded)){selected={};dragEdit.reset();movingPrint=false;repaint();}
         if(preview&&previewReleased)repaint();
         if(recordMode&&lastCursor!=processor.audition().position()){lastCursor=processor.audition().position();repaint();}
         for(const auto& frame:incoming){if(!recordMode&&!history->frames.empty()&&history->frames.back()->epoch!=frame.epoch)view.reset(now());history->append(frame);}
@@ -601,7 +1231,11 @@ public:
             &&result->image.getWidth()==contentBounds.getWidth()&&result->image.getHeight()==contentBounds.getHeight()
             &&result->palette==palette&&result->scale==scaleMode&&result->top==top
             &&((!recorded&&!result->source)||(recorded&&result->source==recorded))){
+            deletionRepair={};repairDesired.reset();
+            waterfallTop=result->top;waterfallScale=result->scale;waterfallPalette=result->palette;
+            if(result->source&&resumePlot.isValid())showResumePlot({});
             waterfall=result->image;waterfallSource=result->source;waterfallStart=result->start;waterfallEnd=result->end;appliedRaster=result->generation;
+            imageRevealId={};  // 新栅格已不再含这次打印，不再需要为它保留旧频谱
             getProperties().set("rasterRevision",result->source?result->source->revision:-1);
             getProperties().set("rasterApplied",(juce::int64)appliedRaster);getProperties().set("rasterMs",result->milliseconds);
             repaint();
@@ -611,9 +1245,21 @@ public:
         // later ticks even when there is no new raster to adopt.
         if(preview&&previewReleased&&waterfall.isValid()&&waterfallSource==recorded&&recorded&&!processor.recording().isBusy())
             for(const auto& e:recorded->edits)if(SPECTRUMTAG_ARA?(e.id==preview->id&&e.amount==preview->amount&&e.imageMode==preview->imageMode&&e.ratio==preview->ratio&&e.invert==preview->invert&&e.compensation==preview->compensation&&e.fillVersion==preview->fillVersion&&e.speed==preview->speed&&e.scaleMode==preview->scaleMode&&e.displayTop==preview->displayTop&&std::abs(e.start-preview->start)<1.e-6&&std::abs(e.duration-preview->duration)<1.e-6):spectrumtag::sameAudioEdit(e,*preview)){setPreview({});break;}
+        if(const auto selection=selectedPrint();processor.filePlayerMode&&imageVisible&&!movingPrint&&imageBox->hasImage()&&selection&&!imageBox->isMouseButtonDown()){
+            const auto& edit=stagedPlacement?*stagedPlacement:*selection;
+            const auto expected=editBounds(edit).translated(-(float)contentBounds.getX(),-(float)contentBounds.getY()).toNearestInt();
+            if(imageBox->getBounds()!=expected)alignImageToPrint(edit);
+        }
         if(changed){dirty=true;repaint();}
         if(dirty)render();
+        if(audioHintFlashUntil!=0){
+            if(juce::Time::getMillisecondCounter()<audioHintFlashUntil)repaint(audioBannerBounds());
+            else{audioHintFlashUntil=0;repaint(audioBannerBounds());}
+        }
         getProperties().set("recordMode",recordMode);getProperties().set("panActive",panActive);getProperties().set("panTarget",panTarget);
+        getProperties().set("audioLoaded",audioLoaded);getProperties().set("audioHintActive",audioHintFlashUntil>juce::Time::getMillisecondCounter());
+        getProperties().set("imageVisible",imageBox->isVisible());
+        getProperties().set("imageStart",imageStart());getProperties().set("audioBannerY",audioBannerBounds().getY());
         getProperties().set("displayStart",view.endTime-timeSpan());getProperties().set("displayEnd",view.endTime);getProperties().set("displayTop",top);getProperties().set("overviewStart",timelineStart());getProperties().set("overviewEnd",recorded?recorded->end():0.);
     }
     juce::var diagnosticState(bool probePixels=false) const {
@@ -676,22 +1322,53 @@ public:
     }
     void mouseMove(const juce::MouseEvent& event) override {
         const auto point=event.getEventRelativeTo(this).position;
+        if(audioBannerBounds().toFloat().contains(point)){setMouseCursor(juce::MouseCursor::PointingHandCursor);return;}
+        if(overviewBounds.toFloat().contains(point)){
+            const auto handle=overviewHitTest(point);
+            setMouseCursor(handle==OverviewHandle::ResizeLeft||handle==OverviewHandle::ResizeRight
+                ?juce::MouseCursor::LeftRightResizeCursor:juce::MouseCursor::PointingHandCursor);
+            return;
+        }
         auto edit=selectedPrint();
         setMouseCursor(edit&&resizeHandle(editBounds(*edit)).contains(point)
             ?juce::MouseCursor::BottomRightCornerResizeCursor:juce::MouseCursor::NormalCursor);
     }
     void mouseDown(const juce::MouseEvent& event) override {
-        panActive=false;dragEdit.reset();movingPrint=false;resizingPrint=false;
-        if(event.mods.isRightButtonDown()){if(contentBounds.contains(event.getEventRelativeTo(this).position.toInt())&&onToggleImage)onToggleImage();return;}
-        if(!recorded||recorded->empty())return;
-        if(isShowing())grabKeyboardFocus();
+        panActive=false;dragEdit.reset();movingPrint=false;resizingPrint=false;overviewHandle=OverviewHandle::None;draggingImage=false;revertGesture=false;
         const auto point=event.getEventRelativeTo(this).position;
+        // 右键：打印 / 退回图片 / 聚焦最近的打印；图片框上的右键由本视图
+        // 作为 MouseListener 收到（ImageBoxComponent 自己不处理右键）。
+        // 只认右键本身：macOS 的 Ctrl+左键仍保留给“Ctrl+拖动复制对象”。
+        if(event.mods.isRightButtonDown()&&contentBounds.toFloat().contains(point)){contextClick(point);return;}
+        // 未加载音频时的引导条：点击等同"加载音频"按钮。
+        if(event.mods.isLeftButtonDown()&&audioBannerBounds().toFloat().contains(point)){if(onRequestAudio)onRequestAudio();return;}
+        // 没有音频时点击频谱：不渲染，只高亮"先加载音频"。
+        if(!recorded||recorded->empty())return;
+        if(renderingPrint)return;
+        if(isShowing()&&event.eventComponent!=imageBox.get())grabKeyboardFocus();
         if(overviewBounds.toFloat().contains(point)){
-            const double t=timelineStart()+juce::jlimit(0.0f,1.0f,(point.x-overviewBounds.getX())/overviewBounds.getWidth())*(recorded->end()-timelineStart());
-            if(onNavigation)onNavigation();processor.auditionAt(t);view.follow=false;fit=false;view.endTime=t+baseSpan()/view.zoomX*.5;
-            updateImageBounds();dirty=true;repaint();return;
+            if(onDismissDraft)onDismissDraft();
+            if(onNavigation)onNavigation();
+            overviewHandle=overviewHitTest(point);
+            if(overviewHandle==OverviewHandle::ResizeLeft||overviewHandle==OverviewHandle::ResizeRight){
+                view.follow=false;fit=false;panActive=false;repaint();
+            }else{
+                overviewHandle=OverviewHandle::Scrub;
+                overviewScrubTo(point.x);
+            }
+            return;
         }
         if(event.eventComponent==imageBox.get())return;
+        if(processor.filePlayerMode&&!contentBounds.toFloat().contains(point)){
+            if(onDismissDraft)onDismissDraft();
+            return;
+        }
+        if(stagedPlacement&&editBounds(*stagedPlacement).contains(point)){
+            dragEdit=stagedPlacement;
+            dragPoint=point;dragBounds=editBounds(*dragEdit);
+            resizingPrint=resizeHandle(dragBounds).contains(point);
+            return;
+        }
         if(!contentBounds.toFloat().contains(point))return;
         const double clickedTime=view.endTime-timeSpan()+(point.x-contentBounds.getX())/contentBounds.getWidth()*timeSpan();
         auto edits=processor.recording().edits();juce::String id;
@@ -708,9 +1385,35 @@ public:
         repaint();
     }
     void mouseDrag(const juce::MouseEvent& event) override {
+        if(overviewHandle!=OverviewHandle::None&&event.mods.isLeftButtonDown()){
+            const auto x=event.getEventRelativeTo(this).position.x;
+            if(overviewHandle==OverviewHandle::Scrub)overviewScrubTo(x);
+            else overviewResizeTo(x);
+            return;
+        }
+        if(draggingImage){
+            if(!event.mods.isLeftButtonDown())return;
+            imageBox->continueExternalDrag(imageBoxPoint(event.getEventRelativeTo(this).position));
+            return;
+        }
         if(!dragEdit||!event.mods.isLeftButtonDown()||!recorded)return;
         const auto delta=event.getEventRelativeTo(this).position-dragPoint;
         if(!movingPrint&&delta.getDistanceFromOrigin()<3.f)return;
+        // 已打印对象被直接拖动（状态2/状态3）：这一手势立即退回未打印态，
+        // 图片按打印范围摆回，并把剩下的位移继续交给图片框，用户不必再点一次。
+        if(!processor.filePlayerMode&&!movingPrint&&dragEdit->id==selected&&onRevertFocused){
+            const auto point=event.getEventRelativeTo(this).position;
+            const bool resize=resizingPrint;
+            revertGesture=true;
+            onRevertFocused();
+            dragEdit.reset();resizingPrint=false;
+            if(imageBox->hasImage()&&imageBox->isVisible()){
+                draggingImage=true;
+                imageBox->beginExternalDrag(imageBoxPoint(dragPoint),resize);
+                imageBox->continueExternalDrag(imageBoxPoint(point));
+            }
+            return;
+        }
         if(!movingPrint){
             if(onMoveBegin)onMoveBegin();movingPrint=true;
             // Build the lightweight image once; geometry gestures stretch this
@@ -737,15 +1440,45 @@ public:
         e.high=frequency((top-contentBounds.getY())/contentBounds.getHeight(),topHz())/nyquist;
         e.low=frequency((top+height-contentBounds.getY())/contentBounds.getHeight(),topHz())/nyquist;
         }
-        preview=e;previewReleased=false;getProperties().set("previewActive",true);repaint();
+        preview=e;previewReleased=false;if(processor.filePlayerMode)previewImage={};
+        getProperties().set("previewActive",true);repaint();
     }
     void mouseUp(const juce::MouseEvent&) override {
+        if(draggingImage){
+            // 退回未打印态的这次手势结束：图片框收尾，编辑器提交同一个撤销步。
+            draggingImage=false;imageBox->endExternalDrag();
+        }else if(revertGesture&&onRevertEnd){
+            // 图片缺失等没能接着拖动的情况：同样要结束这次撤销步。
+            onRevertEnd();
+        }
+        revertGesture=false;
         if(movingPrint&&preview&&onMoveEnd){
             auto e=*preview;
-            if(resizingPrint)e.cols=juce::jlimit(4,4096,juce::roundToInt(editBounds(e).getWidth()));
+            if(resizingPrint&&!processor.filePlayerMode)e.cols=juce::jlimit(4,4096,juce::roundToInt(editBounds(e).getWidth()));
             onMoveEnd(e);
         }
-        dragEdit.reset();movingPrint=false;resizingPrint=false;
+        overviewHandle=OverviewHandle::None;
+        dragEdit.reset();movingPrint=false;resizingPrint=false;draggingImage=false;
+    }
+    void paintOverChildren(juce::Graphics& g) override {
+        if(preview&&previewReleased&&imageBox->isVisible())paintPrintProgress(g,editBounds(*preview));
+    }
+    void paintPrintProgress(juce::Graphics& g,juce::Rectangle<float> bounds){
+        juce::Graphics::ScopedSaveState state(g);
+        g.reduceClipRegion(contentBounds);
+        const float progress=juce::jlimit(0.f,.99f,processor.recording().renderProgress());
+        const auto visible=bounds.getIntersection(contentBounds.toFloat());
+        auto panel=visible.withSizeKeepingCentre(juce::jmin(190.f,visible.getWidth()),juce::jmin(58.f,visible.getHeight()));
+        g.setColour(juce::Colour(0xe51b2023));g.fillRoundedRectangle(panel,5.f);
+        const auto bar=panel.reduced(8.f).removeFromBottom(5.f);g.setColour(juce::Colours::white.withAlpha(.2f));g.fillRect(bar);g.setColour(juce::Colour(0xff80e2b5));g.fillRect(bar.withWidth(bar.getWidth()*progress));
+        const float phase=(float)(juce::Time::getMillisecondCounter()%1200)/1200*juce::MathConstants<float>::twoPi;
+        const auto centre=panel.getCentre().translated(0,-10);juce::Path arc;arc.addCentredArc(centre.x,centre.y,6,6,0,phase,phase+4.6f,true);g.strokePath(arc,juce::PathStrokeType(2.f));
+        g.setColour(juce::Colours::white);g.setFont(chinese?spectrumtag::ui::chineseFont(12.f):juce::Font(12.f));const auto stage=processor.recording().renderStage();juce::String message;
+        if(stage==spectrumtag::RecordingEngine::RenderStage::queued)message=juce::String::fromUTF8(chinese?"等待渲染…":"Queued…");
+        else if(stage==spectrumtag::RecordingEngine::RenderStage::preparing)message=juce::String::fromUTF8(chinese?"准备音频与频谱…":"Preparing audio…");
+        else message=juce::String::fromUTF8(progress>=.85f?(chinese?"更新频谱 ":"Spectrum "):(chinese?"渲染 ":"Rendering "))+(progress<.01f?juce::String("<1"):juce::String((int)(progress*100)))+"%";
+        g.drawText(message,panel.toNearestInt().withTrimmedTop(25).withTrimmedBottom(11),juce::Justification::centred);
+        getProperties().set("renderProgress",progress);
     }
     void paint(juce::Graphics& g) override {
         ++paintCount;paintedRaster=appliedRaster;lastPaintTime=juce::Time::getMillisecondCounterHiRes();
@@ -754,38 +1487,36 @@ public:
         if(waterfall.isValid()){
             juce::Graphics::ScopedSaveState clipped(g);g.reduceClipRegion(contentBounds);
             const auto desired=processor.recording().edits();
-            if(waterfallSource&&desired)for(const auto& e:waterfallSource->edits)
+            const auto imageArea=imageBox->isVisible()&&imageBox->hasImage()
+                ?imageBox->getBounds().translated(contentBounds.getX(),contentBounds.getY()).expanded(2)
+                :juce::Rectangle<int>();
+            if(!processor.filePlayerMode&&waterfallSource&&desired)for(const auto& e:waterfallSource->edits)
                 if(std::none_of(desired->begin(),desired->end(),[&](const auto& current){return current.id==e.id;})){
                     const float padding=(float)(e.fftSize/waterfallSource->sampleRate/timeSpan()*contentBounds.getWidth());
                     // FFT window leakage can reach beyond the image's band.
                     // Hide the obsolete time slice, including that leakage.
                     const auto obsolete=editBounds(e).expanded(padding+2,0);
-                    g.excludeClipRegion(juce::Rectangle<float>(obsolete.getX(),(float)contentBounds.getY(),obsolete.getWidth(),(float)contentBounds.getHeight()).getSmallestIntegerContainer());
+                    // 已打印对象退回未打印态时，这块位置马上由图片本身接替（或者
+                    // 图片正在原位盖着它）。这时只挖掉它自己那条频带：把整列都挖空
+                    // 会让图片上下的频谱在新栅格到达之前闪黑一下。
+                    const bool bandOnly=e.id==imageRevealId
+                        ||(imageArea.getWidth()>0&&imageArea.contains(editBounds(e).getSmallestIntegerContainer()));
+                    g.excludeClipRegion(bandOnly?obsolete.getSmallestIntegerContainer()
+                        :juce::Rectangle<float>(obsolete.getX(),(float)contentBounds.getY(),obsolete.getWidth(),(float)contentBounds.getHeight()).getSmallestIntegerContainer());
                 }
-            if(waterfallEnd>waterfallStart)g.drawImage(waterfall,juce::Rectangle<float>(timeX(waterfallStart),(float)contentBounds.getY(),timeX(waterfallEnd)-timeX(waterfallStart),(float)contentBounds.getHeight()),juce::RectanglePlacement::stretchToFit);
-            else g.drawImageAt(waterfall,contentBounds.getX(),contentBounds.getY());
+            const auto& visibleRaster=processor.filePlayerMode?rasterWithoutEditedPrint(desired):waterfall;
+            if(waterfallEnd>waterfallStart)g.drawImage(visibleRaster,juce::Rectangle<float>(timeX(waterfallStart),(float)contentBounds.getY(),timeX(waterfallEnd)-timeX(waterfallStart),(float)contentBounds.getHeight()),juce::RectanglePlacement::stretchToFit);
+            else g.drawImageAt(visibleRaster,contentBounds.getX(),contentBounds.getY());
         }
         if(recorded){
             juce::Graphics::ScopedSaveState clipped(g);g.reduceClipRegion(contentBounds);
             if(preview){
-                ensurePreviewImage();
                 const auto bounds=editBounds(*preview);
-                g.drawImage(previewImage,bounds,juce::RectanglePlacement::stretchToFit);
-                if(previewReleased){
-                    const float progress=juce::jlimit(0.f,.99f,processor.recording().renderProgress());
-                    const auto visible=bounds.getIntersection(contentBounds.toFloat());
-                    auto panel=visible.withSizeKeepingCentre(juce::jmin(190.f,visible.getWidth()),juce::jmin(58.f,visible.getHeight()));
-                    g.setColour(juce::Colour(0xe51b2023));g.fillRoundedRectangle(panel,5.f);
-                    const auto bar=panel.reduced(8.f).removeFromBottom(5.f);g.setColour(juce::Colours::white.withAlpha(.2f));g.fillRect(bar);g.setColour(juce::Colour(0xff80e2b5));g.fillRect(bar.withWidth(bar.getWidth()*progress));
-                    const float phase=(float)(juce::Time::getMillisecondCounter()%1200)/1200*juce::MathConstants<float>::twoPi;
-                    const auto centre=panel.getCentre().translated(0,-10);juce::Path arc;arc.addCentredArc(centre.x,centre.y,6,6,0,phase,phase+4.6f,true);g.strokePath(arc,juce::PathStrokeType(2.f));
-                    g.setColour(juce::Colours::white);g.setFont(12.f);const auto stage=processor.recording().renderStage();juce::String message;
-                    if(stage==spectrumtag::RecordingEngine::RenderStage::queued)message=juce::String::fromUTF8(chinese?"等待渲染…":"Queued…");
-                    else if(stage==spectrumtag::RecordingEngine::RenderStage::preparing)message=juce::String::fromUTF8(chinese?"准备音频与频谱…":"Preparing audio…");
-                    else message=juce::String::fromUTF8(progress>=.85f?(chinese?"更新频谱 ":"Spectrum "):(chinese?"渲染 ":"Rendering "))+(progress<.01f?juce::String("<1"):juce::String((int)(progress*100)))+"%";
-                    g.drawText(message,panel.toNearestInt().withTrimmedTop(25).withTrimmedBottom(11),juce::Justification::centred);
-                    getProperties().set("renderProgress",progress);
+                if(!processor.filePlayerMode||!imageBox->isVisible()){
+                    ensurePreviewImage();
+                    g.drawImage(previewImage,bounds,juce::RectanglePlacement::stretchToFit);
                 }
+                if(previewReleased&&!imageBox->isVisible())paintPrintProgress(g,bounds);
             }
             if(auto edit=preview&&preview->id==selected?preview:selectedPrint()){
                 const auto box=editBounds(*edit);g.setColour(juce::Colours::white);g.drawRect(box,2.0f);
@@ -793,12 +1524,16 @@ public:
                 g.setColour(juce::Colour(0xff20282b));g.fillRect(handle);
                 g.setColour(juce::Colours::white);g.drawRect(handle,1.f);
                 g.drawLine(handle.getRight()-4,handle.getY()+4,handle.getX()+4,handle.getBottom()-4,1.5f);
-                g.setFont(12.0f);g.drawText(juce::String::fromUTF8(chinese?"Delete 键删除":"Press Delete to Remove"),box.withHeight(18).toNearestInt(),juce::Justification::centred);
+                g.setFont(chinese?spectrumtag::ui::chineseFont(12.0f):juce::Font(12.0f));g.drawText(juce::String::fromUTF8(chinese?"Delete 键删除":"Press Delete to Remove"),box.withHeight(18).toNearestInt(),juce::Justification::centred);
                 getProperties().set("selectedX",box.getX());getProperties().set("selectedY",box.getY());getProperties().set("selectedW",box.getWidth());getProperties().set("selectedH",box.getHeight());
             }
             paintCursor(g,contentBounds,timeX(processor.audition().position()),false);
         }
-        paintOverview(g);
+        if(resumePlot.isValid()&&!overviewBounds.isEmpty()){
+            const int h=resumePlot.getHeight()-82;
+            g.drawImage(resumePlot,contentBounds.getX(),contentBounds.getY(),contentBounds.getWidth(),contentBounds.getHeight(),0,0,resumePlot.getWidth(),h);
+            g.drawImage(resumePlot,overviewBounds.getX(),overviewBounds.getY(),overviewBounds.getWidth(),overviewBounds.getHeight(),0,h,resumePlot.getWidth(),82);
+        }else paintOverview(g);
         g.setColour(kAxisBgColour);g.fillRect(axisBounds);
         const float nyquist=topHz();
         g.setFont(juce::Font(11.0f));
@@ -834,23 +1569,179 @@ public:
                 g.fillRect(axisBounds.getX(),contentBounds.getY()+juce::roundToInt(y*contentBounds.getHeight()),black?17:26,black?3:1);
             }
         }
-        g.setColour(kBgColour);g.fillRect(statusBounds);g.setColour(kTextSub);g.setFont(juce::Font(11.0f));
+        g.setColour(kBgColour);g.fillRect(statusBounds);g.setColour(kTextSub);g.setFont(chinese?spectrumtag::ui::chineseFont(11.0f):juce::Font(11.0f));
         const double span=baseSpan()/view.zoomX;
-        const auto label=(SPECTRUMTAG_ARA?juce::String::fromUTF8(chinese?"ARA 已加载  ":"ARA Loaded  "):processor.filePlayerMode?juce::String::fromUTF8(chinese?"已加载  ":"Loaded  "):recordMode?juce::String::fromUTF8(processor.recording().isArmed()?(chinese?"录音中  ":"Recording  "):(chinese?"已录制  ":"Recorded  ")):juce::String::fromUTF8(view.follow?(chinese?"实时  ":"Live  "):(chinese?"历史  ":"History  ")))+juce::String(view.endTime-span,1)+" - "+juce::String(view.endTime,1)+" s  |  "+juce::String::fromUTF8(chinese?"右键显示 / 隐藏原图":"Right-click: show / hide image")+(preview?juce::String::fromUTF8(previewReleased?(chinese?"  |  模拟预览 — 正在渲染…":"  |  Preview — rendering…"):(chinese?"  |  模拟预览 — 松手后渲染":"  |  Preview — render on release")):juce::String())+(processor.recording().isBusy()?juce::String::fromUTF8(chinese?"  |  正在渲染…":"  |  Rendering…"):juce::String());
+        // 右键的提示跟随三态：能打印时提示打印，聚焦时提示退回，其余提示聚焦。
+        const auto stage=imageStage();
+        const auto rightHint=juce::String::fromUTF8(processor.filePlayerMode?(chinese?"右键显示 / 隐藏图片":"Right-click: show / hide image"):stage==ImageStage::Placing?(chinese?"右键打印":"Right-click: print")
+            :stage==ImageStage::Focused?(chinese?"右键退回图片":"Right-click: back to image")
+            :(chinese?"右键聚焦最近的打印":"Right-click: focus nearest print"));
+        const auto label=(SPECTRUMTAG_ARA?juce::String::fromUTF8(chinese?"ARA 已加载  ":"ARA Loaded  "):processor.filePlayerMode?juce::String::fromUTF8(chinese?"已加载  ":"Loaded  "):recordMode?juce::String::fromUTF8(processor.recording().isArmed()?(chinese?"录音中  ":"Recording  "):(chinese?"已录制  ":"Recorded  ")):juce::String::fromUTF8(view.follow?(chinese?"实时  ":"Live  "):(chinese?"历史  ":"History  ")))+juce::String(view.endTime-span,1)+" - "+juce::String(view.endTime,1)+" s  |  "+rightHint+(preview?juce::String::fromUTF8(previewReleased?(chinese?"  |  模拟预览 — 正在渲染…":"  |  Preview — rendering…"):((processor.filePlayerMode||stagedPlacement||movingPrint)?(chinese?"  |  点击打印以应用预览":"  |  Click Print to apply preview"):(chinese?"  |  模拟预览 — 松手后渲染":"  |  Preview — render on release"))):juce::String())+(processor.recording().isBusy()?juce::String::fromUTF8(chinese?"  |  正在渲染…":"  |  Rendering…"):juce::String());
         const char* errors[]={"","Recording stopped: capture queue full","Recording stopped: 15 min / 64 M sample limit","Recording stopped: sample rate / channel layout changed","Recording cache could not be saved or loaded","Audio import failed / exceeds 15 min or 64 M samples"};
 #if SPECTRUMTAG_ARA
         if(auto status=processor.araStatus();status.isNotEmpty()){
-            g.setColour(juce::Colour(0xee151a1d));g.fillRect(contentBounds.withHeight(45));g.setColour(juce::Colours::lightgrey);g.drawFittedText(status,contentBounds.withHeight(45).reduced(12,4),juce::Justification::centredLeft,2);
+            g.setColour(juce::Colour(0xee151a1d));g.fillRect(contentBounds.withHeight(45));g.setColour(juce::Colours::lightgrey);g.setFont(chinese?spectrumtag::ui::chineseFont(12.0f):juce::Font(12.0f));g.drawFittedText(status,contentBounds.withHeight(45).reduced(12,4),juce::Justification::centredLeft,2);
         }
 #endif
+        // Draw the audio guidance above any ARA status banner: the guide is the
+        // actionable next step when nothing is loaded.
+        paintAudioBanner(g);
         const int error=juce::jlimit(0,5,processor.recording().errorCode());
         const char* errorsZh[]={"","录音已停止：采集队列已满","录音已停止：达到 15 分钟 / 6400 万采样限制","录音已停止：采样率或声道布局改变","无法保存或读取录音缓存","无法导入音频"};
         g.drawText(error?juce::String::fromUTF8(chinese?errorsZh[error]:errors[error]):label,statusBounds.reduced(4,0),juce::Justification::centredLeft);
     }
 private:
+    enum class OverviewHandle { None, Scrub, ResizeLeft, ResizeRight };
+    // 画布上能看到什么，完全由图片对象的三态决定：未加载音频什么都不显示；
+    // 只有未打印/聚焦的对象显示图片框（空对象框就是投放引导）。
+    void refreshCanvasState(){
+        // 清空进行中（音频即将消失）时什么都不显示，避免引导框闪一下。
+        const bool audio=!processor.isClearPending();
+        // 没有音频就没有图片对象：只在“音频曾经可用、随后被清空”时销毁旧图，
+        // 避免启动时音频还没加载完就把刚恢复的图片清掉。
+        if(audio)audioAvailableSeen=true;
+        else if(!processor.filePlayerMode&&audioAvailableSeen&&imageBox->hasImage()){imageBox->clearImage();if(selected.isNotEmpty()){selected={};}}
+        const auto stage=imageStage();
+        // 聚焦态只画打印范围和 Delete 提示（由 SpectrumView 绘制），不再显示图片框。
+        const bool showBox=audio&&(processor.filePlayerMode
+            ?imageVisible
+            :(stage==ImageStage::Empty||stage==ImageStage::Placing));
+        imageBox->setVisible(showBox);
+        const bool canPrintDraft=showBox&&stage==ImageStage::Placing;
+        const bool editingPrint=processor.filePlayerMode&&preview&&!previewReleased&&preview->id==selected;
+        printImageButton.setVisible(!renderingPrint&&(canPrintDraft||stagedPlacement.has_value()||editingPrint)&&!movingPrint&&!processor.isPrintRunning());
+        cancelButton.setVisible(renderingPrint.has_value());
+        if(printImageButton.isVisible()||cancelButton.isVisible())layoutPrintImageButton();
+    }
+    void layoutPrintImageButton(){
+        const int w=78,h=36,gap=8;
+        const auto location=renderingPrint?renderingPrint:stagedPlacement;
+        const auto b=location?editBounds(*location).toNearestInt():imageBox->getBounds().translated(contentBounds.getX(),contentBounds.getY());
+        int x=b.getCentreX()-w/2,y=b.getBottom()+gap;
+        // 下方放不下就放到图片上方，始终不压住图片。
+        if(y+h>contentBounds.getBottom())y=b.getY()-gap-h;
+        x=juce::jlimit(contentBounds.getX()+2,contentBounds.getRight()-w-2,x);
+        y=juce::jlimit(contentBounds.getY()+2,contentBounds.getBottom()-h-2,y);
+        auto& button=renderingPrint?cancelButton:printImageButton;
+        button.setBounds(x,y,w,h);
+        button.toFront(false);
+    }
+    // 频谱视图坐标 → 图片框父组件（图片裁剪层）坐标。
+    juce::Point<int> imageBoxPoint(juce::Point<float> point) const {
+        return (point-juce::Point<float>((float)contentBounds.getX(),(float)contentBounds.getY())).roundToInt();
+    }
+    juce::Rectangle<int> audioBannerBounds() const {
+        if(processor.filePlayerMode||!processor.isLoadMode()||processor.hasLoadedAudio()||contentBounds.isEmpty())return {};
+        const int w=juce::jlimit(1,juce::jmax(1,contentBounds.getWidth()-40),560);
+        const int h=juce::jmin(52,juce::jmax(34,contentBounds.getHeight()/7));
+        // 提示条放在频谱显示区正中间，而不是贴着顶部。
+        return {contentBounds.getCentreX()-w/2,contentBounds.getCentreY()-h/2,w,h};
+    }
+    void paintAudioBanner(juce::Graphics& g){
+        const auto area=audioBannerBounds();
+        if(area.isEmpty())return;
+        const auto nowMs=juce::Time::getMillisecondCounter();
+        const bool flash=audioHintFlashUntil>nowMs;
+        auto r=area.toFloat();
+        g.setColour(juce::Colour(0xe61b2023));g.fillRoundedRectangle(r,8.f);
+        g.setColour(flash?kImgBoxYellow.withAlpha(.55f+.35f*std::sin((float)nowMs*.02f))
+                         :juce::Colours::white.withAlpha(.45f));
+        g.drawRoundedRectangle(r.reduced(1.f),8.f,flash?2.f:1.f);
+
+        juce::Font baseFont=(typeface!=nullptr)?juce::Font(typeface):juce::Font();
+        const auto title=chinese?juce::String::fromUTF8("尚未加载音频"):juce::String("No audio loaded");
+        const auto detail=chinese?(processor.filePlayerMode?juce::String::fromUTF8("拖入音频文件，或点击此处加载")
+                                                                   :juce::String::fromUTF8("点击此处加载音频"))
+                                 :(processor.filePlayerMode?juce::String("Drop an audio file, or click here to load")
+                                                          :juce::String("Click here to load audio"));
+        g.setColour(kTextWhite);
+        g.setFont(chinese?spectrumtag::ui::chineseFont(15.f):baseFont.withHeight(15.f));
+        if(area.getHeight()>=44){
+            g.drawFittedText(title,area.withTrimmedBottom(area.getHeight()/2).reduced(10,0),juce::Justification::centred,1,.9f);
+            g.setColour(kTextSub);
+            g.setFont(chinese?spectrumtag::ui::chineseFont(12.5f):baseFont.withHeight(12.5f));
+            g.drawFittedText(detail,area.withTrimmedTop(area.getHeight()/2).reduced(10,0),juce::Justification::centred,1,.9f);
+        }else{
+            g.drawFittedText(title+"  ·  "+detail,area.reduced(10,0),juce::Justification::centred,1,.85f);
+        }
+    }
+    juce::Rectangle<float> overviewViewRect() const {
+        if(!recorded||overviewBounds.isEmpty())return {};
+        const double start=timelineStart(),end=recorded->end();
+        if(end<=start)return {};
+        const float x0=(float)overviewBounds.getX()+(float)((view.endTime-timeSpan()-start)/(end-start))*overviewBounds.getWidth();
+        const float x1=(float)overviewBounds.getX()+(float)((view.endTime-start)/(end-start))*overviewBounds.getWidth();
+        const float left=juce::jmin(x0,x1),right=juce::jmax(x0,x1);
+        const float clampedLeft=juce::jmax((float)overviewBounds.getX(),left);
+        const float clampedRight=juce::jmin((float)overviewBounds.getRight(),right);
+        if(clampedRight-clampedLeft<1.f)return {};
+        return {clampedLeft,(float)overviewBounds.getY(),clampedRight-clampedLeft,(float)overviewBounds.getHeight()};
+    }
+    OverviewHandle overviewHitTest(juce::Point<float> point) const {
+        if(!recorded||recorded->empty()||!overviewBounds.toFloat().contains(point))return OverviewHandle::None;
+        const auto rect=overviewViewRect();
+        if(!rect.isEmpty()){
+            // A fixed edge zone lets the view window be stretched with the same
+            // effect as Ctrl-wheel (visible span == Speed / view zoom).
+            const float edge=juce::jlimit(5.f,9.f,rect.getWidth()*.12f);
+            if(std::abs(point.x-rect.getX())<=edge)return OverviewHandle::ResizeLeft;
+            if(std::abs(point.x-rect.getRight())<=edge)return OverviewHandle::ResizeRight;
+        }
+        return OverviewHandle::Scrub;
+    }
+    double overviewTimeAt(float x) const {
+        const double start=timelineStart(),end=recorded?recorded->end():start;
+        if(end<=start)return start;
+        return start+juce::jlimit(0.f,1.f,(x-(float)overviewBounds.getX())/juce::jmax(1,overviewBounds.getWidth()))*(end-start);
+    }
+    void overviewScrubTo(float x){
+        if(!recorded)return;
+        const double t=overviewTimeAt(x);
+        processor.auditionAt(t);view.follow=false;fit=false;
+        view.endTime=t+baseSpan()/view.zoomX*.5;
+        updateImageBounds();dirty=true;repaint();
+    }
+    void overviewResizeTo(float x){
+        if(!recorded||overviewBounds.isEmpty())return;
+        const double totalStart=timelineStart(),totalEnd=recorded->end();
+        const double totalSpan=juce::jmax(.05,totalEnd-totalStart);
+        const double pointerTime=overviewTimeAt(x);
+        const double viewSpan=timeSpan(),viewStart=view.endTime-viewSpan;
+        // The box represents the loaded range: keep the fixed edge inside it so
+        // the dragged width maps to the real visible span.
+        const double fixed=overviewHandle==OverviewHandle::ResizeLeft?juce::jmin(view.endTime,totalEnd)
+                                                                   :juce::jmax(viewStart,totalStart);
+        double span=overviewHandle==OverviewHandle::ResizeLeft?fixed-pointerTime:pointerTime-fixed;
+        const double plotWidth=juce::jmax(1,contentBounds.getWidth());
+        if(processor.filePlayerMode&&selectedPrint()){
+            // Dragging the overview is a view gesture. Preserve even the Speed
+            // control value of the selected Print, as well as its saved edit.
+            const double minSpan=juce::jmin(.05,totalSpan);
+            span=juce::jlimit(minSpan,totalSpan,span);
+            view.zoomX=baseSpan()/span;
+            view.endTime=juce::jlimit(totalStart+span,juce::jmax(totalStart+span,totalEnd),
+                                     overviewHandle==OverviewHandle::ResizeLeft?fixed:fixed+span);
+            view.follow=false;fit=false;panActive=false;
+            alignImageToPrint(stagedPlacement?*stagedPlacement:*selectedPrint());
+            dirty=true;repaint();return;
+        }
+        const double zoom=selectedPrint()?view.zoomX:1.0;
+        // Match the Speed range used by the Ctrl-wheel path: 0.1x–4x.
+        const double minSpan=plotWidth/(spectrumtag::timing::pixelsPerSecond*4.0*zoom);
+        const double maxSpan=juce::jmax(minSpan,juce::jmin(totalSpan,
+            plotWidth/(spectrumtag::timing::pixelsPerSecond*0.1*zoom)));
+        span=juce::jlimit(minSpan,maxSpan,span);
+        const float speed=(float)juce::jlimit(0.1,4.0,plotWidth/(spectrumtag::timing::pixelsPerSecond*span*zoom));
+        if(onWheelSpeed)onWheelSpeed(speed);
+        view.zoomX=zoom;lastSpeed=speed;fit=false;view.follow=false;panActive=false;
+        const double newSpan=timeSpan();
+        view.endTime=overviewHandle==OverviewHandle::ResizeLeft?fixed:fixed+newSpan;
+        view.endTime=juce::jlimit(totalStart+newSpan,juce::jmax(totalStart+newSpan,totalEnd),view.endTime);
+        updateImageBounds();dirty=true;repaint();
+    }
     void ensurePreviewImage(){
         if(previewImage.isValid()||!preview||!recorded)return;
-        previewImage=spectrumtag::printPreview(*recorded,*preview,palette);
+        previewImage=spectrumtag::printPreview(*recorded,*preview,palette,processor.filePlayerMode);
     }
     void paintCursor(juce::Graphics& g,juce::Rectangle<int> bounds,float x,bool overview){
         const double time=processor.audition().position();const int side=x<bounds.getX()?-1:x>bounds.getRight()?1:0;
@@ -882,7 +1773,7 @@ private:
     void paintOverview(juce::Graphics& g){
         if(overviewBounds.isEmpty())return;
         g.setColour(kPanelColour);g.fillRect(overviewBounds);
-        if(!recorded||recorded->empty()){g.setColour(kTextSub);g.setFont(12.0f);g.drawText(juce::String::fromUTF8(SPECTRUMTAG_ARA?(chinese?"选择 DAW 音频事件，然后点击加载":"Select DAW audio events, then click Load"):(chinese?"录音就绪 — 播放 DAW 开始采集":"Record armed - play the DAW to capture audio")),overviewBounds,juce::Justification::centred);return;}
+        if(!recorded||recorded->empty()){g.setColour(kTextSub);g.setFont(chinese?spectrumtag::ui::chineseFont(12.0f):juce::Font(12.0f));g.drawText(juce::String::fromUTF8(SPECTRUMTAG_ARA?(chinese?"选择 DAW 音频事件，然后点击加载":"Select DAW audio events, then click Load"):(chinese?"录音就绪 — 播放 DAW 开始采集":"Record armed - play the DAW to capture audio")),overviewBounds,juce::Justification::centred);return;}
         const double length=juce::jmax(.001,recorded->end()-timelineStart());
         const auto x=[&](double t){return overviewBounds.getX()+(float)((t-timelineStart())/length)*overviewBounds.getWidth();};
         {juce::Graphics::ScopedSaveState clipped(g);g.reduceClipRegion(overviewBounds);
@@ -898,11 +1789,60 @@ private:
         }
         overviewSource=recorded;overviewPalette=palette;}
         g.drawImageAt(overviewImage,overviewBounds.getX(),overviewBounds.getY());
-        const float left=x(view.endTime-baseSpan()/view.zoomX),right=x(view.endTime);
-        g.setColour(juce::Colours::white.withAlpha(.09f));g.fillRect(juce::Rectangle<float>(left,(float)overviewBounds.getY(),right-left,(float)overviewBounds.getHeight()));
-        g.setColour(juce::Colours::white.withAlpha(.7f));g.drawRect(juce::Rectangle<float>(left,(float)overviewBounds.getY()+1,right-left,(float)overviewBounds.getHeight()-2),1);
+        const auto viewRect=overviewViewRect();
+        if(!viewRect.isEmpty()){
+            g.setColour(juce::Colours::white.withAlpha(.09f));g.fillRect(viewRect);
+            g.setColour(juce::Colours::white.withAlpha(.72f));g.drawRect(viewRect.reduced(0.f,1.f),1.f);
+            if(viewRect.getWidth()>=18.f){
+                // Edge grips: drag them to resize the visible span (Speed).
+                const float gripW=2.5f,gripTop=viewRect.getY()+5.f,gripH=juce::jmax(6.f,viewRect.getHeight()-10.f);
+                g.setColour(juce::Colours::white.withAlpha(overviewHandle==OverviewHandle::ResizeLeft?.95f:.55f));
+                g.fillRect(viewRect.getX()+1.f,gripTop,gripW,gripH);
+                g.setColour(juce::Colours::white.withAlpha(overviewHandle==OverviewHandle::ResizeRight?.95f:.55f));
+                g.fillRect(viewRect.getRight()-1.f-gripW,gripTop,gripW,gripH);
+            }
+        }
         for(const auto& edit:recorded->edits){g.setColour(edit.id==selected?juce::Colours::white:juce::Colours::white.withAlpha(.4f));g.fillRect(x(edit.start),(float)overviewBounds.getBottom()-5,juce::jmax(1.0f,x(edit.start+edit.duration)-x(edit.start)),3.0f);}
         paintCursor(g,overviewBounds,x(processor.audition().position()),true);}
+    }
+    // Repair obsolete pixels before the next paint, even with transport stopped.
+    // The original FFT tiles already exist. Recompose only the deleted time
+    // slices, preserving overlapping Prints until the new exact raster arrives.
+    const juce::Image& rasterWithoutEditedPrint(const std::shared_ptr<const std::vector<spectrumtag::PrintEdit>>& desired){
+        if(!waterfallSource||!desired||waterfallEnd<=waterfallStart)return waterfall;
+        // A move or a replacement temporarily removes only its committed layer.
+        // Audio and persisted edits keep their original values until Print.
+        juce::String omitted;
+        if(preview){
+            const auto old=std::find_if(waterfallSource->edits.begin(),waterfallSource->edits.end(),
+                [&](const auto& e){return e.id==preview->id;});
+            if(old!=waterfallSource->edits.end()&&(!previewReleased||!spectrumtag::sameAudioEdit(*old,*preview)))
+                omitted=old->id;
+        }
+        if(repairDesired==desired&&repairOmitted==omitted)return deletionRepair.isValid()?deletionRepair:waterfall;
+        repairDesired=desired;repairOmitted=omitted;deletionRepair={};
+        std::vector<spectrumtag::PrintEdit> remaining;
+        if(omitted.isNotEmpty())
+            std::copy_if(desired->begin(),desired->end(),std::back_inserter(remaining),[&](const auto& e){return e.id!=omitted;});
+        const auto& layers=omitted.isEmpty()?*desired:remaining;
+        const int width=waterfall.getWidth(),height=waterfall.getHeight();
+        const double secondsPerPixel=(waterfallEnd-waterfallStart)/width;
+        for(const auto& removed:waterfallSource->edits){
+            if(std::any_of(layers.begin(),layers.end(),[&](const auto& edit){return edit.id==removed.id;}))continue;
+            const double spill=(removed.fftSize+waterfallSource->fftSize)/waterfallSource->sampleRate;
+            const int left=juce::jlimit(0,width,(int)std::floor((removed.start-spill-waterfallStart)/secondsPerPixel));
+            const int right=juce::jlimit(0,width,(int)std::ceil((removed.start+removed.duration+spill-waterfallStart)/secondsPerPixel));
+            if(right<=left)continue;
+            auto area=removed;area.start=waterfallStart+left*secondsPerPixel;area.duration=(right-left)*secondsPerPixel;
+            const float nyquist=(float)waterfallSource->sampleRate*.5f;
+            area.scaleMode=waterfallScale;area.low=spectrumtag::frequency::minimum(waterfallScale)/nyquist;area.high=waterfallTop/nyquist;
+            const auto* saved=backgroundFor(removed.id,layers);
+            const auto patch=spectrumtag::printPreview(*waterfallSource,area,waterfallPalette,true,&layers,{right-left,height},saved);
+            if(!patch.isValid())continue;
+            if(!deletionRepair.isValid())deletionRepair=waterfall.createCopy();
+            juce::Graphics g(deletionRepair);g.drawImageAt(patch,left,0);
+        }
+        return deletionRepair.isValid()?deletionRepair:waterfall;
     }
     double baseSpan() const{return juce::jmax(.1,(double)contentBounds.getWidth()/(spectrumtag::timing::pixelsPerSecond*juce::jmax(.01f,processor.getAPVTS().getParameter(ParameterIDs::speed)->convertFrom0to1(processor.getAPVTS().getParameter(ParameterIDs::speed)->getValue()))));}
     float frequency(float y,float nyquist) const{return spectrumtag::frequency::fromY(y,nyquist,scaleMode);}
@@ -930,14 +1870,22 @@ private:
     spectrumtag::SpectrumViewport view;
     juce::Component imageClip;
     FitSpectrumButton fitButton;
+    RoundPrintButton cancelButton {"Cancel"};
+    RoundPrintButton printImageButton {"Print"};   // 未打印图片对象的打印按钮，贴在图片下方居中
     std::unique_ptr<ImageBoxComponent> imageBox;
     juce::Rectangle<int> contentBounds,axisBounds,statusBounds,overviewBounds;
     std::shared_ptr<const spectrumtag::RecordingSnapshot> recorded;
     std::shared_ptr<const std::vector<spectrumtag::PrintEdit>> observedEdits;
     juce::String selected;
+    juce::String imageRevealId;  // 正被图片接替的打印：绘制时只挖它的频带
     std::optional<spectrumtag::PrintEdit> preview,dragEdit;bool previewReleased=false,movingPrint=false,resizingPrint=false;
+    bool draggingImage=false;   // 已退回未打印态的图片正跟随当前拖动
+    bool revertGesture=false;   // 本次手势由“撤掉打印”开启，松手时必须收尾
     juce::Image previewImage;juce::Point<float> dragPoint;juce::Rectangle<float> dragBounds;
     bool recordMode=false,chinese=true,fit=false,restored=false,wasPlaying=false,wasArmed=false,fitAfterCapture=false;
+    bool lastHasImage=false,lastAudioLoaded=false,audioAvailableSeen=false;
+    juce::uint32 audioHintFlashUntil=0;
+    OverviewHandle overviewHandle=OverviewHandle::None;
     float lastTop=0;
     spectrumtag::ViewRenderer renderer;
     uint64_t requestedRaster=0,appliedRaster=0,rasterEpoch=0,lastClearSerial=0;
@@ -945,6 +1893,10 @@ private:
     bool panActive=false;double panTarget=0,panTick=0;
     juce::Image overviewImage;std::shared_ptr<const spectrumtag::RecordingSnapshot> overviewSource;int overviewPalette=-1;
     double lastCursor=-1;
+    juce::Image deletionRepair;
+    juce::String repairOmitted;
+    std::shared_ptr<const std::vector<spectrumtag::PrintEdit>> repairDesired;
+    float waterfallTop=20000;int waterfallScale=0,waterfallPalette=0;
     juce::Image waterfall;std::shared_ptr<const spectrumtag::RecordingSnapshot> waterfallSource;double waterfallStart=0,waterfallEnd=0;
     std::array<juce::Colour,256> lut;
     int palette=0,scaleMode=0;float lastSpeed=-1;bool dirty=true;
@@ -983,17 +1935,16 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
         BinaryData::BasementGrotesqueBlack_v1_202_otfSize);
 
     setLookAndFeel (&lookAndFeel);
+    setComponentID("editor");
     tooltipLookAndFeel.setDefaultSansSerifTypefaceName(spectrumtag::ui::chineseFontName());
     tooltipWindow.setLookAndFeel(&tooltipLookAndFeel);
-    tooltipLanguageButton.setLookAndFeel(&tooltipLookAndFeel);
-    tooltipLanguageButton.setColour(juce::TextButton::buttonColourId,kPanelColour);
-    tooltipLanguageButton.setColour(juce::TextButton::textColourOffId,kTextWhite);
+    // 右上角三个工具入口（诊断 / 音频设备 / 语言）统一为只有描边的按钮。
+    tooltipLanguageButton.getProperties().set("spectrumTagStyle","outline");
     chineseTips=processor.getEditorState().chinese;
     tooltipLanguageButton.setComponentID("tooltipLanguage");
     tooltipLanguageButton.onClick=[this]{beginChange();chineseTips=!chineseTips;spectrumtag::Preferences::remember(nullptr,nullptr,&chineseTips);refreshLanguage();changed();finishChange(true);};
     addAndMakeVisible(tooltipLanguageButton);
-    diagnosticsButton.setLookAndFeel(&tooltipLookAndFeel);
-    diagnosticsButton.setColour(juce::TextButton::buttonColourId,kPanelColour);
+    diagnosticsButton.getProperties().set("spectrumTagStyle","outline");
     diagnosticsButton.setComponentID("exportDiagnostics");
     diagnosticsButton.onClick=[this]{exportDiagnostics();};addAndMakeVisible(diagnosticsButton);
 
@@ -1001,6 +1952,13 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
     titleLabel.setText (SPECTRUMTAG_ARA?"SpectrumTag ARA":"SpectrumTag", juce::dontSendNotification);
     styleHeaderLabel (titleLabel, SPECTRUMTAG_ARA?25.0f:32.0f, kTextWhite);
     addAndMakeVisible (titleLabel);
+    if(processor.filePlayerMode){
+        editionLabel.setText(juce::String::fromUTF8("(子青版)"),juce::dontSendNotification);
+        editionLabel.setComponentID("editionLabel");
+        editionLabel.setColour(juce::Label::textColourId,kTextWhite);
+        editionLabel.setFont(spectrumtag::ui::chineseFont(22.f));
+        addAndMakeVisible(editionLabel);
+    }
 
     versionLabel.setText (juce::String ("v") + (processor.filePlayerMode&&processor.filePlayerVersion.isNotEmpty()?processor.filePlayerVersion:juce::String(JucePlugin_VersionString)), juce::dontSendNotification);
     styleHeaderLabel (versionLabel, 18.0f, kTextWhite);
@@ -1016,35 +1974,95 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
     spectrumView = std::make_unique<SpectrumView> (processor, basementTypeface);
     addAndMakeVisible (*spectrumView);
 
+    spectrumView->getImageBox().setLivePreviewMode(processor.filePlayerMode);
+    spectrumView->onCancel=[this]{finishStandalonePrint(true);};
+    if(processor.filePlayerMode)spectrumView->onDismissDraft=[this]{
+        if(pendingSelected||spectrumView->stagedPlacement||standaloneCopyOrigin.isNotEmpty())selectPrinted({});
+    };
+    spectrumView->onToggleImage=[this](bool centre){toggleStandaloneImage(centre);};
     // 图片框回调：选图/拖动后写回 Processor
-    spectrumView->getImageBox().onChanged = [this] {if(!suppressChanges){if(gestureActive){spectrumView->selectEdit({});placementId={};}changed(!gestureActive);}persistEditorStateToProcessor();};
-    spectrumView->getImageBox().onGestureStart=[this]{beginChange();gestureActive=true;};
-    spectrumView->getImageBox().onGestureEnd=[this]{gestureActive=false;finishChange(true);};
+    spectrumView->getImageBox().onChanged = [this] {
+        // 拖动只改位置/大小；聚焦对象是否退回未打印态由松手（onGestureEnd）决定。
+        if(!suppressChanges){
+            if(processor.filePlayerMode&&gestureActive){
+                if(spectrumView->getImageBox().isMovingSource()&&spectrumView->sourcePrintId.isNotEmpty()){
+                    // The revealed source becomes a new placement on its first movement.
+                    // Deselect before dropping a draft so the box stays under the pointer.
+                    standaloneCopyOrigin=spectrumView->sourcePrintId;
+                    spectrumView->selectEdit({});
+                    spectrumView->sourcePrintId={};placementId={};
+                    spectrumView->discardPlacement();
+                    spectrumView->setPreview({});
+                    simulateImage=true;
+                }else if(spectrumView->selectedPrint()){
+                    auto moved=makeEdit(true);moved.id=spectrumView->selectedEdit();
+                    spectrumView->stagePlacement(moved);
+                    simulateImage=true;
+                }else if(spectrumView->sourcePrintId.isNotEmpty()){
+                    spectrumView->sourcePrintId={};placementId={};
+                }
+            }
+            changed(false);
+        }
+        persistEditorStateToProcessor();
+    };
+    spectrumView->getImageBox().onGestureStart=[this]{
+        beginChange();gestureActive=true;
+    };
+    // Ctrl+拖动：原对象留在原位打印，副本继续被这次拖动带走。
+    spectrumView->getImageBox().onDuplicateDrag=[this]{duplicateImageObject();};
+    spectrumView->getImageBox().onGestureEnd=[this]{
+        gestureActive=false;
+        if(processor.filePlayerMode)showImageArtwork();
+        // 聚焦态下拖动/缩放图片属于“需要重新渲染”的修改：撤掉已打印的图案，
+        // 对象退回未打印态，图片停在新位置等待重新打印。
+        if(!processor.filePlayerMode&&spectrumView->selectedPrint())unprintFocused();
+        finishChange(true);
+    };
     spectrumView->getImageBox().onFileLoadStart=[this]{beginChange();};
     spectrumView->onSelected=[this](const juce::String& id){selectPrinted(id);};
+    // 未加载音频时，点击画布上的引导条等同按"加载音频 / Load audio"。
+    spectrumView->onRequestAudio=[this]{if(!processor.isClearPending())recordButton.onClick();};
+    spectrumView->onImagePrint=[this]{onPrintClicked();};
+    // 右键把聚焦的打印退回图片模式（状态3 → 状态1）：撤掉打印、源图按原范围摆回。
+    spectrumView->onContextRevert=[this]{
+        finishChange(true);
+        if(!spectrumView->selectedPrint())return;
+        beginChange();
+        unprintFocused();
+        finishChange(true);
+    };
     spectrumView->onDelete=[this]{removeSelected();};
     spectrumView->onNavigation=[this]{finishChange(true);changed();};
     spectrumView->onWheelSpeed=[this](float value){
         wheelChange=true;auto* p=processor.getAPVTS().getParameter(ParameterIDs::speed);
         p->beginChangeGesture();p->setValueNotifyingHost(p->convertTo0to1(value));p->endChangeGesture();wheelChange=false;changed();
     };
-    spectrumView->onMoveBegin=[this]{beginChange();gestureActive=true;};
-    spectrumView->onMoveEnd=[this](const spectrumtag::PrintEdit& value){
-        auto e=value;auto source=processor.recording().snapshot();
-        const auto old=spectrumView->selectedPrint();
-        if(source&&(e.scaleMode!=0||!old||e.cols!=old->cols)){const float nyquist=(float)source->sampleRate*.5f;e.mask=std::make_shared<const std::vector<float>>(spectrumView->getImageBox().generateMask(e.rows,e.cols,e.scaleMode,e.low*nyquist,e.high*nyquist));}
-        processor.recording().add(e,e.id);gestureActive=false;spectrumView->alignImageToPrint(e);changed();finishChange(true);spectrumView->setPreview(e,true);
+    spectrumView->onMoveBegin=[this]{
+        beginChange();gestureActive=true;
+        if(processor.filePlayerMode)simulateImage=true;
     };
-    spectrumView->getImageBox().onImagePicked = [this] (const juce::File& file) { imagePicked(file); };
+    // 直接拖动已打印对象（状态2/状态3）：撤掉这次打印、图片按打印范围摆回，
+    // 剩下的位移由同一手势继续作用在图片上；松手时整体提交，算一个撤销步。
+    spectrumView->onRevertFocused=[this]{finishChange(true);beginChange();gestureActive=true;unprintFocused();};
+    spectrumView->onRevertEnd=[this]{gestureActive=false;finishChange(true);};
+    spectrumView->onMoveEnd=[this](const spectrumtag::PrintEdit& moved){
+        if(processor.filePlayerMode){
+            spectrumView->stagePlacement(moved);
+            spectrumView->imageVisible=false;
+            spectrumView->refreshCanvas();
+            gestureActive=false;changed();finishChange(true);return;
+        }
+        // 聚焦对象被拖动/缩放：撤掉打印、退回未打印态。
+        spectrumView->setPreview({});
+        unprintFocused();
+        finishChange(true);
+    };
+    spectrumView->getImageBox().onImageRequested = [this] (const juce::File& file) { imagePicked(file); };
     for(int i=0;i<8;++i){
         auto button=std::make_unique<PaletteButton>(i);button->setComponentID("palette"+juce::String(i));
         button->onClick=[this,i]{beginChange();selectPalette(i,true);changed();finishChange(true);};addAndMakeVisible(*button);paletteButtons[(size_t)i]=std::move(button);
     }
-    imageVisibilityButton.setComponentID("imageVisibility");
-    imageVisibilityButton.setTooltip("Show or hide the image without changing Print. A newly loaded image is shown automatically.");
-    imageVisibilityButton.onClick=[this]{beginChange();imageVisible=!imageVisible;spectrumView->setImageVisible(imageVisible);imageVisibilityButton.setToggleState(imageVisible,juce::dontSendNotification);changed();finishChange(true);};
-    addAndMakeVisible(imageVisibilityButton);
-    spectrumView->onToggleImage=[this]{imageVisibilityButton.onClick();};
 
     // ---- 控件标签 ----
     styleControlLabel (fftSizeLabel);
@@ -1089,6 +2107,12 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
     printButton.setComponentID("printButton");
     printButton.setTypeface (basementTypeface);
     recordButton.setComponentID("recordButton");removePrintButton.setComponentID("removePrint");clearRecordButton.setComponentID("clearRecord");
+    copyImageButton.setComponentID("copyImage");copyImageButton.onClick=[this]{if(copyButtonPaste)pasteImageObject();else copyImageObject();refreshCopyButton();};
+    if(processor.filePlayerMode){
+        imageVisibilityButton.setComponentID("imageVisibility");
+        imageVisibilityButton.onClick=[this]{toggleStandaloneImage();};
+        addAndMakeVisible(imageVisibilityButton);
+    }
     previousPrintButton.setComponentID("previousPrint");nextPrintButton.setComponentID("nextPrint");
     recordButton.onClick=[this]{
         if(processor.filePlayerMode){finishChange(true);if(processor.onLoadAudioFile)processor.onLoadAudioFile();return;}
@@ -1109,16 +2133,21 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
 #else
         processor.clearRecordedAudio();
 #endif
-        placementId={};spectrumView->clearDisplay();
+        // 清空 = 音频 + 全部图片对象一起清除；源图与缓存的图片引用都不保留。
+        if(!processor.filePlayerMode)spectrumView->getImageBox().clearImage();
+        spectrumView->selectEdit({});placementId={};standaloneCopyOrigin={};retainHiddenParameters=false;spectrumView->clearDisplay();spectrumView->refreshCanvas();
+        const juce::String noImage;
+        if(!processor.filePlayerMode)spectrumtag::Preferences::remember(&noImage,nullptr);
         persistEditorStateToProcessor();stableState=processor.captureUserState();
     };
     removePrintButton.onClick=[this]{removeSelected();};previousPrintButton.onClick=[this]{navigatePrint(false);};nextPrintButton.onClick=[this]{navigatePrint(true);};
-    for(auto* b:std::initializer_list<juce::Button*>{&recordButton,&removePrintButton,&clearRecordButton,&previousPrintButton,&nextPrintButton})addAndMakeVisible(b);
+    for(auto* b:std::initializer_list<juce::Button*>{&recordButton,&removePrintButton,&copyImageButton,&clearRecordButton,&previousPrintButton,&nextPrintButton})addAndMakeVisible(b);
     if(processor.isLoadMode()){recordButton.setComponentID("loadButton");clearRecordButton.setComponentID("clearLoad");}
     frequencyRangeLabel.setComponentID("frequencyRangeLabel");fftSizeLabel.setComponentID("fftSizeLabel");frequencyRangeCombo.setComponentID("frequencyRange");frequencyRangeCombo.addItemList({"20 kHz","24 kHz","22.05 kHz","48 kHz"},1);
     addAndMakeVisible(frequencyRangeCombo);addAndMakeVisible(frequencyRangeLabel);
     printButton.onClick = [this] { onPrintClicked(); };
     addAndMakeVisible (printButton);
+    printButton.setVisible(false); // 打印按钮不再显示：图片放置模式下点击频谱自动打印。
 
     styleControlLabel(imageModeLabel); styleControlLabel(imageAmountLabel);
     addAndMakeVisible(imageModeLabel); addAndMakeVisible(imageAmountLabel);
@@ -1131,9 +2160,29 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
     imageAmountSlider.setTooltip("Auto/Detail: higher values make more pixels black. Manual: brightness threshold. Alpha: opacity threshold. Alt + left-click or double-click resets to 0.5.");
     addAndMakeVisible(imageAmountSlider);
 
+    // 灰度模式：彩色照片按像素灰度逐格衰减，右侧提供对比/亮度两个旋钮。
+    styleControlLabel(imageStyleLabel); styleControlLabel(imageGrayContrastLabel); styleControlLabel(imageGrayBrightnessLabel);
+    addAndMakeVisible(imageStyleLabel); addAndMakeVisible(imageGrayContrastLabel); addAndMakeVisible(imageGrayBrightnessLabel);
+    imageStyleCombo.setComponentID("imageStyle");
+    imageStyleCombo.addItemList({"Logo mode","Complex image"},1);
+    addAndMakeVisible(imageStyleCombo);
+    imageStyleCombo.onChange=[this]{
+        syncImagePreview();changed(true);
+        if(processor.filePlayerMode&&spectrumView->imageVisible)showImageArtwork();
+    };
+    for(auto* slider:{&imageGrayContrastSlider,&imageGrayBrightnessSlider}){
+        slider->setSliderStyle(juce::Slider::LinearHorizontal);
+        slider->setTextBoxStyle(juce::Slider::TextBoxRight,false,48,20);
+        slider->setRange(0.0,1.0,0.001);
+        slider->setDoubleClickReturnValue(true,0.5,juce::ModifierKeys::altModifier);
+        addAndMakeVisible(*slider);
+    }
+    imageGrayContrastSlider.setComponentID("imageGrayContrast");
+    imageGrayBrightnessSlider.setComponentID("imageGrayBrightness");
+
     // ---- APVTS Attachments ----
     auto& vts = processor.getAPVTS();
-    fftSizeAttachment=std::make_unique<juce::ParameterAttachment>(*vts.getParameter(ParameterIDs::fftSize),[this](float value){const int index=juce::jmin(2,(int)value);fftSizeCombo.setSelectedId(index+1,juce::dontSendNotification);processor.recording().setDisplayFft(1024<<index);},nullptr);
+    fftSizeAttachment=std::make_unique<juce::ParameterAttachment>(*vts.getParameter(ParameterIDs::fftSize),[this](float value){const int index=juce::jmin(2,(int)value);fftSizeCombo.setSelectedId(index+1,juce::dontSendNotification);if(!processor.filePlayerMode||(!spectrumView->selectedPrint()&&processor.recording().edits()->empty()))processor.recording().setDisplayFft(1024<<index);},nullptr);
     fftSizeAttachment->sendInitialUpdate();
     fftSizeCombo.onChange=[this]{fftSizeAttachment->setValueAsCompleteGesture((float)fftSizeCombo.getSelectedItemIndex());changed(true);};
     auto scaleChanged=[this](float){if(!changingScaleControl)syncFrequencyScale();};
@@ -1144,18 +2193,24 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
     amplitudeAttachment = std::make_unique<SliderAttachment> (vts, ParameterIDs::amplitudeRatio, amplitudeSlider);
     invertAttachment    = std::make_unique<ButtonAttachment> (vts, ParameterIDs::invert,         invertToggle);
 
+    imageStyleAttachment=std::make_unique<ComboAttachment>(vts,ParameterIDs::imageStyle,imageStyleCombo);
     imageModeAttachment=std::make_unique<ComboAttachment>(vts,ParameterIDs::imageMode,imageModeCombo);
     imageAmountAttachment=std::make_unique<SliderAttachment>(vts,ParameterIDs::imageAmount,imageAmountSlider);
+    imageGrayContrastAttachment=std::make_unique<SliderAttachment>(vts,ParameterIDs::imageGrayContrast,imageGrayContrastSlider);
+    imageGrayBrightnessAttachment=std::make_unique<SliderAttachment>(vts,ParameterIDs::imageGrayBrightness,imageGrayBrightnessSlider);
     noiseFillAttachment=std::make_unique<SliderAttachment>(vts,ParameterIDs::noiseFill,noiseFillSlider);
     frequencyRangeAttachment=std::make_unique<ComboAttachment>(vts,ParameterIDs::frequencyRange,frequencyRangeCombo);
-    for(auto* slider:{&speedSlider,&amplitudeSlider,&imageAmountSlider,&noiseFillSlider}){
+    for(auto* slider:{&speedSlider,&amplitudeSlider,&imageAmountSlider,&imageGrayContrastSlider,&imageGrayBrightnessSlider,&noiseFillSlider}){
         slider->onDragStart=[this]{beginChange();gestureActive=true;};
-        slider->onDragEnd=[this]{gestureActive=false;changedAt=juce::Time::getMillisecondCounter();};
+        slider->onDragEnd=[this]{
+            gestureActive=false;changedAt=juce::Time::getMillisecondCounter();
+            if(processor.filePlayerMode&&spectrumView->imageVisible)showImageArtwork();
+        };
         slider->onValueChange=[this,slider]{
             if(suppressChanges||processor.isRestoringUserState())return;
-            if(slider==&speedSlider&&wheelChange){changed();return;}
+            if(slider==&speedSlider&&wheelChange){changed(!processor.filePlayerMode);return;}
             if(slider==&speedSlider)spectrumView->useAbsoluteSpeed((float)speedSlider.getValue());
-            if(slider==&speedSlider&&spectrumView->selectedPrint())pendingDuration=true;
+            if(processor.filePlayerMode&&slider==&speedSlider&&spectrumView->selectedPrint())pendingDuration=true;
             syncImagePreview();changed(true);
         };
     }
@@ -1169,17 +2224,18 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
         if(mode==spectrumtag::frequency::insight){
             // An explicit preset choice calibrates timing. Host automation and
             // selecting an existing Print only recall their stored settings.
+            if(processor.filePlayerMode&&spectrumView->selectedPrint())pendingPresetTiming=true;
             const bool previous=suppressChanges;suppressChanges=true;
             auto setValue=[this](const juce::String& id,float value){auto* p=processor.getAPVTS().getParameter(id);p->beginChangeGesture();p->setValueNotifyingHost(p->convertTo0to1(value));p->endChangeGesture();};
             setValue(ParameterIDs::speed,(float)spectrumtag::timing::presetSpeed(mode,spectrumView->getContentBounds().getHeight()));
             spectrumView->setScaleMode(mode);
             spectrumView->matchPresetTime(imageAnchor);
-            suppressChanges=previous;pendingPresetTiming=spectrumView->selectedPrint().has_value();
+            suppressChanges=previous;
         }
         changingScaleControl=false;syncFrequencyScale();processor.rememberARAFrequencyChoice();
     };
     frequencyRangeCombo.onChange=[this]{
-        if(!suppressChanges&&!processor.isRestoringUserState()&&spectrumView->selectedPrint())pendingFrequency=true;
+        if(processor.filePlayerMode&&!suppressChanges&&spectrumView->selectedPrint())pendingFrequency=true;
         changed(true);
     };
     spectrumView->setScaleMode((fftScaleCombo.getSelectedId()-1));
@@ -1203,6 +2259,10 @@ SpectrumTagAudioProcessorEditor::SpectrumTagAudioProcessorEditor (SpectrumTagAud
     std::vector<juce::Component*> controls;for(auto* child:getChildren())controls.push_back(child);
     for(auto* child:controls)scaledContent.addAndMakeVisible(child);
     addAndMakeVisible(scaledContent);scaleReady=true;
+    // 「显示上限」暂时屏蔽显示（addAndMakeVisible 会重新显示子组件，必须放在重挂之后）：
+    // 参数、附件与重渲染逻辑全部保留，默认 22.05 kHz。
+    frequencyRangeCombo.setVisible(processor.filePlayerMode);frequencyRangeLabel.setVisible(processor.filePlayerMode);
+    copyImageButton.setVisible(!processor.filePlayerMode);
 #if SPECTRUMTAG_ARA
     clearRecordButton.setVisible(true);
 #endif
@@ -1272,8 +2332,7 @@ bool SpectrumTagAudioProcessorEditor::isInterestedInFileDrag (const juce::String
 void SpectrumTagAudioProcessorEditor::filesDropped (const juce::StringArray& files,
                                                     int /*x*/, int /*y*/)
 {
-    if (spectrumView == nullptr) return;
-    auto& imgBox = spectrumView->getImageBox();
+    if (spectrumView == nullptr||standalonePrintJob) return;
 
     for (auto& f : files)
     {
@@ -1284,12 +2343,9 @@ void SpectrumTagAudioProcessorEditor::filesDropped (const juce::StringArray& fil
         if (ext != ".png" && ext != ".jpg" && ext != ".jpeg"
             && ext != ".bmp" && ext != ".gif") continue;
 
-        beginChange();
-        if (imgBox.loadImageFromFile (file))
-        {
-            imagePicked(file);changed();finishChange(true);
-            break;   // 只取第一张有效图片
-        }
+        // imagePicked 负责音频门禁、先打印上一张未打印图片、载入与状态更新。
+        imagePicked(file);
+        break;   // 只取第一张有效图片
     }
 }
 
@@ -1339,24 +2395,40 @@ void SpectrumTagAudioProcessorEditor::resized()
 
     // ===== 顶部 =====
     tooltipLanguageButton.setBounds(canvasWidth-px(100),px(14),px(80),px(26));
-    diagnosticsButton.setBounds(canvasWidth-px(232),px(14),px(124),px(26));
+    diagnosticsButton.setBounds(canvasWidth-px(!processor.filePlayerMode&&processor.isLoadMode()?348:232),px(14),px(124),px(26));
     uiScaleCombo.setBounds(20,52,90,28);
     const int headerH = px (90);
     auto header = r.removeFromTop (headerH).reduced (px (20), px (8)).withHeight(px(38));
     const int toolbarOffset=processor.isLoadMode()?105:0;
     for(int i=0;i<8;++i)if(paletteButtons[(size_t)i])paletteButtons[(size_t)i]->setBounds(px(125-toolbarOffset+i*35),px(52),px(30),px(30));
-    imageVisibilityButton.setBounds(415-toolbarOffset,52,34,28);
-    recordButton.setBounds(459-toolbarOffset,52,84,28);clearRecordButton.setBounds(551-toolbarOffset,52,103,28);
-    removePrintButton.setBounds(662-toolbarOffset,52,75,28);previousPrintButton.setBounds(745-toolbarOffset,52,70,28);nextPrintButton.setBounds(823-toolbarOffset,52,70,28);
+    const int recordW=processor.isLoadMode()?104:84;
+    const int recordX=459-toolbarOffset;
+    if(processor.filePlayerMode)imageVisibilityButton.setBounds(recordX-46,52,36,28);
+    recordButton.setBounds(recordX,52,recordW,28);
+    removePrintButton.setBounds(recordX+recordW+8,52,75,28);
+    // 复制/粘贴按钮紧贴删除按钮右侧，导航箭头顺势右移。
+    copyImageButton.setBounds(recordX+recordW+91,52,68,28);
+    // 导航箭头只有图标、没有底板，按钮本身收窄到图标宽度附近。
+    previousPrintButton.setBounds(recordX+recordW+(processor.filePlayerMode?91:167),52,36,28);
+    nextPrintButton.setBounds(recordX+recordW+(processor.filePlayerMode?131:207),52,36,28);
+    clearRecordButton.setBounds(canvasWidth-300-46,52,34,28);
     frequencyRangeLabel.setBounds(canvasWidth-300,52,142,28);frequencyRangeCombo.setBounds(canvasWidth-158,52,138,28);
 
-    titleLabel.setBounds (header.removeFromLeft (px (250)));
+    titleLabel.setFont   (juce::Font (basementTypeface).withHeight ((SPECTRUMTAG_ARA?25.0f:32.0f) * scale));
+    if(processor.filePlayerMode){
+        const auto textWidth=[](const juce::Label& label){
+            return juce::roundToInt(std::ceil(juce::GlyphArrangement::getStringWidth(label.getFont(),label.getText())))+label.getBorderSize().getLeftAndRight();
+        };
+        titleLabel.setBounds(header.removeFromLeft(textWidth(titleLabel)));
+        editionLabel.setFont(spectrumtag::ui::chineseFont(22.f*scale));
+        editionLabel.setBorderSize(juce::BorderSize<int>(0));
+        editionLabel.setBounds(header.removeFromLeft(textWidth(editionLabel)));
+    }else titleLabel.setBounds(header.removeFromLeft(px(250)));
     header.removeFromLeft (px (8));
     versionLabel.setBounds (header.removeFromLeft (px (80)));
     header.removeFromLeft (px (4));
     websiteLabel->setBounds (header.removeFromLeft (px (200)));
 
-    titleLabel.setFont   (juce::Font (basementTypeface).withHeight ((SPECTRUMTAG_ARA?25.0f:32.0f) * scale));
     versionLabel.setFont (juce::Font (basementTypeface).withHeight (18.0f * scale));
     websiteLabel->setFontHeight (18.0f * scale);
 
@@ -1376,7 +2448,7 @@ void SpectrumTagAudioProcessorEditor::resized()
     const int spacing  = px (10);
     const int rowGap   = px (16);
 
-    auto controlFont = chineseTips?juce::Font(juce::FontOptions(spectrumtag::ui::chineseFontName(),18.0f,juce::Font::plain)):juce::Font(basementTypeface).withHeight(18.0f);
+    auto controlFont = chineseTips?spectrumtag::ui::chineseFont(18.0f):juce::Font(basementTypeface).withHeight(18.0f);
     fftSizeLabel.setFont (controlFont);
     fftScaleLabel.setFont (controlFont);
     speedLabel.setFont (controlFont);
@@ -1397,7 +2469,7 @@ void SpectrumTagAudioProcessorEditor::resized()
 
     auto speedRow=rightPanel.removeFromTop(labelH);
     speedLabel.setBounds(speedRow.removeFromLeft(85));timeSpanLabel.setBounds(speedRow);
-    timeSpanLabel.setFont(juce::Font(juce::FontOptions(spectrumtag::ui::chineseFontName(),14.f,juce::Font::plain)));
+    timeSpanLabel.setFont(spectrumtag::ui::chineseFont(14.f));
     rightPanel.removeFromTop (spacing);
     speedSlider.setBounds (rightPanel.removeFromTop (sliderH));
     rightPanel.removeFromTop (rowGap);
@@ -1408,12 +2480,26 @@ void SpectrumTagAudioProcessorEditor::resized()
     rightPanel.removeFromTop (rowGap);
 
     imageModeLabel.setFont(controlFont); imageAmountLabel.setFont(controlFont);
-    imageModeLabel.setBounds(rightPanel.removeFromTop(labelH));
-    imageModeCombo.setBounds(rightPanel.removeFromTop(comboH));
-    rightPanel.removeFromTop(px(10));
-    imageAmountLabel.setBounds(rightPanel.removeFromTop(labelH));
-    imageAmountSlider.setBounds(rightPanel.removeFromTop(px(24)));
-    rightPanel.removeFromTop(px(10));
+    imageStyleLabel.setFont(controlFont);
+    // 独立版的导出圆钮压在右侧面板底部，灰度控件必须保持紧凑。
+    const auto grayFont=chineseTips?spectrumtag::ui::chineseFont(16.0f):juce::Font(basementTypeface).withHeight(16.0f);
+    imageGrayContrastLabel.setFont(grayFont);imageGrayBrightnessLabel.setFont(grayFont);
+    // 图像相关的五行统一“标签 + 控件同排”，给独立版底部导出圆钮留出空间。
+    auto layoutLabelRow=[&](juce::Label& label,juce::Component& control,int controlWidth,int controlHeight){
+        auto row=rightPanel.removeFromTop(juce::jmax(labelH,controlHeight));
+        control.setBounds(row.removeFromRight(px(controlWidth)).withSizeKeepingCentre(px(controlWidth),controlHeight));
+        label.setBounds(row);
+        rightPanel.removeFromTop(px(4));
+    };
+    layoutLabelRow(imageStyleLabel,imageStyleCombo,138,comboH);
+    if(imageModeCombo.isVisible()){
+        layoutLabelRow(imageModeLabel,imageModeCombo,138,comboH);
+        layoutLabelRow(imageAmountLabel,imageAmountSlider,180,24);
+    }
+    if(imageGrayContrastSlider.isVisible()){
+        layoutLabelRow(imageGrayContrastLabel,imageGrayContrastSlider,186,18);
+        layoutLabelRow(imageGrayBrightnessLabel,imageGrayBrightnessSlider,186,18);
+    }
 
     {
         auto row = rightPanel.removeFromTop (px (28));
@@ -1429,13 +2515,35 @@ void SpectrumTagAudioProcessorEditor::resized()
 
     rightPanel.removeFromTop(px(4));noiseFillLabel.setBounds(rightPanel.removeFromTop(labelH));
     noiseFillSlider.setBounds(rightPanel.removeFromTop(px(24)));
-    // Print 圆按钮：右下角
-    const int printD = px (128);
-    auto printArea = juce::Rectangle<int> (
-        canvasWidth - px (20) - printD,
-        canvasHeight - px (20) - printD,
-        printD, printD);
-    printButton.setBounds (printArea);
+}
+
+// ----------------------------------------------------------------------------
+//  独立版覆盖控件的落点（编辑器本地坐标）。与 resized() 使用同一套画布换算，
+//  由独立版把播放/导出/状态标签叠放到编辑器上方。
+// ----------------------------------------------------------------------------
+juce::Image SpectrumTagAudioProcessorEditor::captureResumePlot(){return spectrumView->captureResumePlot();}
+void SpectrumTagAudioProcessorEditor::showResumePlot(juce::Image image){spectrumView->showResumePlot(std::move(image));}
+SpectrumTagAudioProcessorEditor::StandaloneSlots SpectrumTagAudioProcessorEditor::standaloneSlots() const
+{
+    StandaloneSlots slots;
+    const bool followsOuterFrame=processor.isLoadMode();
+    const float s=followsOuterFrame?juce::jlimit(.1f,2.5f,juce::jmin((float)getWidth()/kDefaultWidth,(float)getHeight()/kDefaultHeight))
+                                   :juce::jlimit(.75f,2.5f,(float)getHeight()/kDefaultHeight);
+    const int canvasWidth=followsOuterFrame?juce::roundToInt(getWidth()/s):kDefaultWidth;
+    const int canvasHeight=followsOuterFrame?juce::roundToInt(getHeight()/s):kDefaultHeight;
+    const auto map=[&](juce::Rectangle<int> canvasRect){
+        return juce::Rectangle<int>(juce::roundToInt(canvasRect.getX()*s),juce::roundToInt(canvasRect.getY()*s),
+                                    juce::roundToInt(canvasRect.getWidth()*s),juce::roundToInt(canvasRect.getHeight()*s));
+    };
+    // 播放：频谱下方波形预览左侧的频率刻度列，与预览条垂直居中。
+    // 频谱视图位于画布 (20, 90, W-40, H-110)，波形预览条画布纵向为 [H-122, H-40]。
+    slots.play=map({29,canvasHeight-107,52,52});
+    // 导出：占据原 Print 按钮的右下角位置（Print 已改为点击频谱自动触发）。
+    slots.exportButton=map({canvasWidth-148,canvasHeight-148,128,128});
+    // 文件名 / 导出进度：标题行网站链接右侧。
+    const int fileNameLeft=processor.filePlayerMode?680:574;
+    slots.fileName=map({fileNameLeft,8,juce::jmax(1,canvasWidth-240-fileNameLeft),38});
+    return slots;
 }
 
 // ----------------------------------------------------------------------------
@@ -1444,16 +2552,46 @@ void SpectrumTagAudioProcessorEditor::syncFrequencyScale() {
     const int preset=value(ParameterIDs::frequencyPreset);
     const int mode=preset==2?1:preset>0?preset+1:value(ParameterIDs::fftScale);
     fftScaleCombo.setSelectedId(mode+1,juce::dontSendNotification);spectrumView->setScaleMode(mode);
-    if(!suppressChanges&&!processor.isRestoringUserState()&&spectrumView->selectedPrint())pendingFrequency=true;
+    if(processor.filePlayerMode&&!suppressChanges&&!processor.isRestoringUserState()&&spectrumView->selectedPrint())pendingFrequency=true;
     changed(true);
 }
 void SpectrumTagAudioProcessorEditor::syncImagePreview()
 {
     if(spectrumView==nullptr) return;
     auto& state=processor.getAPVTS();
+    const bool grayscale=*state.getRawParameterValue(ParameterIDs::imageStyle)>0.5f;
     spectrumView->getImageBox().setConversion((int)*state.getRawParameterValue(ParameterIDs::imageMode),
         *state.getRawParameterValue(ParameterIDs::imageAmount), *state.getRawParameterValue(ParameterIDs::invert)>0.5f,
-        *state.getRawParameterValue(ParameterIDs::amplitudeRatio));
+        *state.getRawParameterValue(ParameterIDs::amplitudeRatio), grayscale,
+        *state.getRawParameterValue(ParameterIDs::imageGrayContrast),
+        *state.getRawParameterValue(ParameterIDs::imageGrayBrightness));
+    updateImageStyleControls();
+}
+// 两种模式各有一组专属参数：不适用的一组直接隐藏（并让面板收起空行），
+// 只保留当前模式真正能调的控件。
+void SpectrumTagAudioProcessorEditor::updateImageStyleControls()
+{
+    const bool complexImage=*processor.getAPVTS().getRawParameterValue(ParameterIDs::imageStyle)>0.5f;
+    const bool editable=!processor.filePlayerMode||(!standalonePrintJob
+        &&(!retainHiddenParameters||spectrumView->imageVisible||spectrumView->selectedEdit().isNotEmpty()));
+    if(processor.filePlayerMode){
+        imageStyleCombo.setEnabled(editable);
+        amplitudeSlider.setEnabled(editable);
+        invertToggle.setEnabled(editable);
+    }
+    auto show=[&](juce::Component& control,bool visible){
+        control.setEnabled(visible&&editable);control.setAlpha(1.0f);
+        if(control.isVisible()==visible)return false;
+        control.setVisible(visible);return true;
+    };
+    bool changed=false;
+    // Logo 模式：阈值方式 + 阈值强度。
+    changed|=show(imageModeLabel,!complexImage);changed|=show(imageModeCombo,!complexImage);
+    changed|=show(imageAmountLabel,!complexImage);changed|=show(imageAmountSlider,!complexImage);
+    // 复杂图像模式：灰度对比 + 灰度亮度。
+    changed|=show(imageGrayContrastLabel,complexImage);changed|=show(imageGrayContrastSlider,complexImage);
+    changed|=show(imageGrayBrightnessLabel,complexImage);changed|=show(imageGrayBrightnessSlider,complexImage);
+    if(changed)resized();
 }
 #if SPECTRUMTAG_ARA
 void SpectrumTagAudioProcessorEditor::parentHierarchyChanged()
@@ -1512,12 +2650,23 @@ void SpectrumTagAudioProcessorEditor::timerCallback()
     processor.pollARA();
 #endif
     processor.pollTransportTimeout();
-    if(processor.getStateRevision()!=lastStateRevision){pendingChange=pendingSelected=pendingDuration=pendingFrequency=pendingPresetTiming=false;restoreEditorStateFromProcessor();stableState=processor.captureUserState();}
+    if(standalonePrintJob)finishStandalonePrint(false);
+    if(processor.getStateRevision()!=lastStateRevision){pendingChange=pendingRevert=false;restoreEditorStateFromProcessor();stableState=processor.captureUserState();}
     syncImagePreview();
-    const bool maskChanged=spectrumView->getImageBox().refreshConversion();
-    if(maskChanged&&pendingSelected&&spectrumView->selectedPrint())
-        spectrumView->setPreview(editedSelection(false),false,pendingDuration||pendingPresetTiming);
+    auto& sourceBox=spectrumView->getImageBox();
+    if(sourceBox.refreshConversion()){
+        standalonePreviewDirty=true;
+        if(processor.filePlayerMode&&spectrumView->stagedPlacement&&!pendingSelected){
+            auto draft=*spectrumView->stagedPlacement;
+            if(const auto audio=processor.recording().snapshot()){
+                const auto nyquist=(float)audio->sampleRate*.5f;
+                draft.mask=std::make_shared<const std::vector<float>>(sourceBox.generateMask(draft.rows,draft.cols,draft.scaleMode,draft.low*nyquist,draft.high*nyquist,true));
+                spectrumView->stagePlacement(draft);
+            }
+        }
+    }
     spectrumView->tick();
+    updateStandalonePreview();
     if(juce::Time::getMillisecondCounter()-lastDiagnosticTick>=500){lastDiagnosticTick=juce::Time::getMillisecondCounter();diagnosticHistory.add(diagnosticState());}
     const auto timingPrefix=spectrumView->isFitView()
         ?juce::String::fromUTF8(chineseTips?"全览 ":"Fit ")+juce::String(spectrumView->fitSpeed(),3)+juce::String::fromUTF8("× · ")
@@ -1540,14 +2689,25 @@ void SpectrumTagAudioProcessorEditor::timerCallback()
     }
     printButton.setEnabled((!processor.filePlayerMode||processor.recording().isEnabled())&&!processor.isPrintRunning()&&(!SPECTRUMTAG_ARA||(processor.araBound()&&processor.recording().snapshot()!=nullptr)));
     processor.flushPrintMathLogToFile();
-    recordButton.setButtonText(juce::String::fromUTF8(processor.isLoadMode()?(chineseTips?"加载":"Load"):processor.recording().isArmed()?(chineseTips?"停止录音":"Stop Rec"):(chineseTips?"录音":"Record")));
-    recordButton.setColour(juce::TextButton::buttonColourId,processor.recording().isArmed()?juce::Colour(0xff983e56):kPanelColour);
-    removePrintButton.setEnabled(spectrumView->selectedPrint().has_value());clearRecordButton.setEnabled(processor.recording().isEnabled()&&!processor.isClearPending());recordButton.setEnabled(!processor.isClearPending());
-    previousPrintButton.setEnabled(!processor.isClearPending()&&adjacentPrint(false).isNotEmpty());nextPrintButton.setEnabled(!processor.isClearPending()&&adjacentPrint(true).isNotEmpty());
+    recordButton.setButtonText(juce::String::fromUTF8(processor.isLoadMode()?(chineseTips?"加载音频":"Load audio"):processor.recording().isArmed()?(chineseTips?"停止录音":"Stop Rec"):(chineseTips?"录音":"Record")));
+    recordButton.setColour(juce::TextButton::buttonColourId,processor.recording().isArmed()?juce::Colour(0xff983e56):kButtonBg);
+    // 图片对象存在（未打印或聚焦）即可删除；清空按钮同时清除音频与全部图片。
+    const bool objectSelected=spectrumView->getImageBox().hasImage()||spectrumView->selectedPrint().has_value();
+    removePrintButton.setEnabled(!standalonePrintJob&&(processor.filePlayerMode?spectrumView->selectedPrint().has_value():objectSelected));
+    if(processor.filePlayerMode)imageVisibilityButton.setToggleState(spectrumView->imageVisible,juce::dontSendNotification);
+    // 复制按钮与删除按钮同样只在有对象时亮起；已经复制、等待粘贴时保持可用，
+    // 否则复制后一旦取消聚焦就按不到粘贴。
+    copyImageButton.setEnabled(objectSelected||(copyButtonPaste&&clipboardImagePath.isNotEmpty()));
+    clearRecordButton.setEnabled(!standalonePrintJob&&processor.recording().isEnabled()&&!processor.isClearPending());recordButton.setEnabled(!standalonePrintJob&&!processor.isClearPending());
+    // 只有频谱里存在多个打印时才需要导航，单个对象时把两个箭头藏起来。
+    const auto printCount=processor.recording().edits()?processor.recording().edits()->size():0;
+    const bool multiplePrints=processor.filePlayerMode||printCount>1;
+    previousPrintButton.setVisible(multiplePrints);nextPrintButton.setVisible(multiplePrints);
+    previousPrintButton.setEnabled(!standalonePrintJob&&!processor.isClearPending()&&adjacentPrint(false).isNotEmpty());nextPrintButton.setEnabled(!standalonePrintJob&&!processor.isClearPending()&&adjacentPrint(true).isNotEmpty());
 #if SPECTRUMTAG_ARA
     recordButton.setEnabled(processor.araBound());clearRecordButton.setEnabled(processor.araBound()&&processor.getEditorView<spectrumtag::ara::View>()->loaded);
 #endif
-    auto recording=processor.recording().snapshot();noiseFillSlider.setEnabled(processor.recording().isEnabled()&&recording&&!recording->empty());noiseFillLabel.setAlpha(noiseFillSlider.isEnabled()?1.f:.4f);
+    auto recording=processor.recording().snapshot();noiseFillSlider.setEnabled(!standalonePrintJob&&(!processor.filePlayerMode||imageStyleCombo.isEnabled())&&processor.recording().isEnabled()&&recording&&!recording->empty());noiseFillLabel.setAlpha(noiseFillSlider.isEnabled()?1.f:.4f);
     if(!pendingChange&&!gestureActive){persistEditorStateToProcessor();stableState=processor.captureUserState();}
 }
 
@@ -1601,28 +2761,96 @@ void SpectrumTagAudioProcessorEditor::beginChange(){
 void SpectrumTagAudioProcessorEditor::changed(bool parameters){
     if(suppressChanges||processor.isRestoringUserState())return;
     if(!pendingChange){changeBefore=stableState;pendingChange=true;}
-    if(parameters&&spectrumView->selectedPrint()){pendingSelected=true;spectrumView->setPreview(editedSelection(false),false,pendingDuration||pendingPresetTiming);}
+    // 聚焦态下任何影响渲染的修改（参数、速度、频率刻度…）都会让已打印图案失效：
+    // 手势结束后撤掉打印，对象退回未打印态。
+    standalonePreviewDirty=true;
+    if(processor.filePlayerMode&&parameters)simulateImage=spectrumView->imageVisible;
+    if(parameters&&spectrumView->selectedPrint()){
+        if(processor.filePlayerMode){
+            pendingSelected=true;
+
+        }
+        else pendingRevert=true;
+    }
     changedAt=juce::Time::getMillisecondCounter();
     persistEditorStateToProcessor();
 }
 void SpectrumTagAudioProcessorEditor::finishChange(bool force){
     if(suppressChanges||!pendingChange)return;
     if(!force&&(gestureActive||juce::Time::getMillisecondCounter()-changedAt<180||!spectrumView->getImageBox().conversionReady()))return;
-    if(pendingSelected){updateSelectedPrint();spectrumView->releasePreview();}
+    if(pendingSelected)finishSelectedPreview();
+    if(processor.filePlayerMode&&spectrumView->imageVisible&&simulateImage)showImageArtwork();
+    if(pendingRevert){pendingRevert=false;unprintFocused();}
     persistEditorStateToProcessor();auto after=processor.captureUserState();
     processor.commitUserChange(std::move(changeBefore),after);stableState=std::move(after);pendingChange=pendingSelected=pendingDuration=pendingFrequency=pendingPresetTiming=false;
 }
 void SpectrumTagAudioProcessorEditor::undo(bool redo){
+    if(standalonePrintJob)finishStandalonePrint(false);
+    if(standalonePrintJob){finishStandalonePrint(true);return;}
     finishChange(true);gestureActive=false;recordBefore.reset();
     if(processor.undoUserChange(redo)){restoreEditorStateFromProcessor();stableState=processor.captureUserState();}
 }
 bool SpectrumTagAudioProcessorEditor::keyPressed(const juce::KeyPress& key){
-    if(key.getModifiers().isCtrlDown()&&(key.getKeyCode()=='z'||key.getKeyCode()=='Z')){undo(key.getModifiers().isShiftDown());return true;}
-    if(key.getKeyCode()==juce::KeyPress::deleteKey&&spectrumView->selectedPrint()){removeSelected();return true;}return false;
+    const auto mods=key.getModifiers();
+    if(mods.isCtrlDown()&&(key.getKeyCode()=='z'||key.getKeyCode()=='Z')){undo(mods.isShiftDown());return true;}
+    if(!processor.filePlayerMode&&mods.isCtrlDown()&&(key.getKeyCode()=='c'||key.getKeyCode()=='C')){copyImageObject();return true;}
+    if(!processor.filePlayerMode&&mods.isCtrlDown()&&(key.getKeyCode()=='v'||key.getKeyCode()=='V')){pasteImageObject();return true;}
+    if(key.getKeyCode()==juce::KeyPress::deleteKey&&(spectrumView->selectedPrint()||spectrumView->getImageBox().hasImage())){removeSelected();return true;}return false;
+}
+bool SpectrumTagAudioProcessorEditor::audioReady() const {
+    return spectrumView!=nullptr&&!processor.isClearPending();
+}
+// 把“未打印”对象渲染进频谱；成功后源图销毁，对象只剩频谱里的挖空（已打印态）。
+bool SpectrumTagAudioProcessorEditor::printPlacingObject(){
+    if(processor.filePlayerMode||!spectrumView||spectrumView->imageStage()!=SpectrumView::ImageStage::Placing||!spectrumView->getImageBox().hasImage())return false;
+    if(!processor.recording().isEnabled())return false;
+    auto source=processor.recording().snapshot();if(!source||source->empty())return false;
+    auto e=makeEdit();
+    if(e.start>=source->end()||e.start+e.duration<=source->start())return false;
+    processor.recording().add(e);
+    spectrumView->setPreview(e,true);
+    spectrumView->getImageBox().clearImage();spectrumView->selectEdit({});placementId={};
+    spectrumView->refreshCanvas();
+    return true;
+}
+// 聚焦态被修改：撤掉这次打印（频谱恢复原样），把对象自己的图片按打印范围
+// 摆回来，变成“未打印”的状态1，等待重新打印。
+void SpectrumTagAudioProcessorEditor::unprintFocused(){
+    const auto id=spectrumView->selectedEdit();
+    const auto edit=spectrumView->selectedPrint();
+    if(id.isEmpty()||!edit)return;
+    auto& box=spectrumView->getImageBox();
+    if(!box.hasImage()&&!edit->imagePath.isEmpty()&&juce::File(edit->imagePath).existsAsFile())box.loadImageFromFile(juce::File(edit->imagePath));
+    spectrumView->alignImageToPrint(*edit);
+    // 绘制层：这次打印正被退回的图片接替，不要在图片上下的频谱里挖出黑柱。
+    spectrumView->markPrintRevealed(id);
+    processor.recording().remove(id);
+    spectrumView->setPreview({});
+    spectrumView->selectEdit({});
+    spectrumView->refreshDeletedPrint();
+    placementId={};
+    spectrumView->refreshCanvas();
+    changed();
 }
 void SpectrumTagAudioProcessorEditor::removeSelected(){
-    beginChange();const auto id=spectrumView->selectedEdit();if(id.isEmpty()){finishChange(true);return;}
-    processor.recording().remove(id);spectrumView->setPreview({});spectrumView->selectEdit({});spectrumView->refreshDeletedPrint();if(placementId==id)placementId={};changed();finishChange(true);
+    if(standalonePrintJob)return;
+    finishChange(true);
+    const auto focusedId=spectrumView->selectedEdit();
+    const bool printed=focusedId.isNotEmpty()&&spectrumView->selectedPrint().has_value();
+    if(!printed&&(processor.filePlayerMode||!spectrumView->getImageBox().hasImage()))return;
+    spectrumView->discardPlacement();
+    beginChange();
+    if(printed){
+        processor.recording().remove(focusedId);
+        spectrumView->setPreview({});
+        spectrumView->selectEdit({});
+        spectrumView->refreshDeletedPrint();
+    }
+    // 删除的是“图片对象”本身：原图和它的打印一起消失，不会以任何方式回来。
+    if(!processor.filePlayerMode)spectrumView->getImageBox().clearImage();
+    placementId={};spectrumView->sourcePrintId={};
+    spectrumView->refreshCanvas();
+    changed();finishChange(true);
 }
 juce::String SpectrumTagAudioProcessorEditor::adjacentPrint(bool next)const{
     auto edits=processor.recording().edits();if(!edits||edits->empty())return {};
@@ -1637,21 +2865,58 @@ void SpectrumTagAudioProcessorEditor::navigatePrint(bool next){
     finishChange(true);const auto id=adjacentPrint(next);if(id.isNotEmpty())selectPrinted(id);
 }
 void SpectrumTagAudioProcessorEditor::selectPrinted(const juce::String& id){
-    finishChange(true);beginChange();spectrumView->selectEdit(id);placementId=id;
-    if(auto edit=spectrumView->selectedPrint()){
-        suppressChanges=true;changingScaleControl=true;
-        auto assign=[this](const juce::String& name,float value){auto* p=processor.getAPVTS().getParameter(name);p->beginChangeGesture();p->setValueNotifyingHost(p->convertTo0to1(value));p->endChangeGesture();};
-        assign(ParameterIDs::speed,edit->speed);assign(ParameterIDs::imageMode,(float)edit->imageMode);assign(ParameterIDs::imageAmount,edit->amount);
-        assign(ParameterIDs::amplitudeRatio,edit->ratio);assign(ParameterIDs::invert,edit->invert?1.f:0.f);assign(ParameterIDs::noiseFill,edit->compensation);
-        assign(ParameterIDs::fftSize,edit->fftSize==1024?0.f:edit->fftSize==2048?1.f:2.f);assign(ParameterIDs::fftScale,edit->scaleMode==1?1.f:0.f);assign(ParameterIDs::frequencyPreset,(float)juce::jmax(0,edit->scaleMode-1));
-        const float tops[]={20000,24000,22050,48000};int range=0;for(int i=1;i<4;++i)if(std::abs(tops[i]-edit->displayTop)<std::abs(tops[range]-edit->displayTop))range=i;
-        assign(ParameterIDs::frequencyRange,(float)range);changingScaleControl=false;syncFrequencyScale();
-        auto& box=spectrumView->getImageBox();if(box.getImagePath()!=edit->imagePath&&juce::File(edit->imagePath).existsAsFile())box.loadImageFromFile(juce::File(edit->imagePath));
-        syncImagePreview();spectrumView->restorePrintView(*edit);processor.rememberARAFrequencyChoice();suppressChanges=false;
+    if(standalonePrintJob)return;
+    if(processor.filePlayerMode&&retainHiddenParameters&&!spectrumView->imageVisible
+        &&(id.isEmpty()||id==spectrumView->selectedEdit()))return;
+    showImageArtwork();
+    finishChange(true);
+    const bool copying=standaloneCopyOrigin.isNotEmpty();
+    const bool abandonDraft=processor.filePlayerMode&&(copying||spectrumView->stagedPlacement.has_value());
+    const auto previous=copying?spectrumView->findPrint(standaloneCopyOrigin):spectrumView->selectedPrint();
+    if(id.isEmpty()&&!previous&&!copying)return;
+    if(id.isNotEmpty()&&!spectrumView->findPrint(id))return;
+    beginChange();
+    spectrumView->discardPlacement();
+    retainHiddenParameters=false;
+    if(abandonDraft||(processor.filePlayerMode&&id.isNotEmpty()))spectrumView->imageVisible=false;
+    standaloneCopyOrigin={};
+    if(id.isEmpty()){
+        if(abandonDraft&&previous){recallPrint(*previous);placementId=previous->id;}
+        spectrumView->selectEdit({});
+        if(!processor.filePlayerMode){placementId={};spectrumView->getImageBox().clearImage();}
+        spectrumView->refreshCanvas();
+        changed();finishChange(true);
+        return;
     }
+    // 只允许一个未打印对象：聚焦别的对象前，先把当前未打印的图片打印进去。
+    if(!processor.filePlayerMode&&spectrumView->imageStage()==SpectrumView::ImageStage::Placing)printPlacingObject();
+    spectrumView->selectEdit(id);placementId=id;
+    if(auto edit=spectrumView->selectedPrint()){
+        recallPrint(*edit);
+    }
+    spectrumView->refreshCanvas();
     changed();finishChange(true);
 }
-spectrumtag::PrintEdit SpectrumTagAudioProcessorEditor::makeEdit(){
+void SpectrumTagAudioProcessorEditor::recallPrint(const spectrumtag::PrintEdit& edit){
+    suppressChanges=true;changingScaleControl=true;
+    auto assign=[this](const juce::String& name,float value){auto* p=processor.getAPVTS().getParameter(name);p->beginChangeGesture();p->setValueNotifyingHost(p->convertTo0to1(value));p->endChangeGesture();};
+    assign(ParameterIDs::speed,edit.speed);assign(ParameterIDs::imageMode,(float)edit.imageMode);assign(ParameterIDs::imageAmount,edit.amount);
+    assign(ParameterIDs::imageStyle,(float)edit.imageStyle);assign(ParameterIDs::imageGrayContrast,edit.grayContrast);assign(ParameterIDs::imageGrayBrightness,edit.grayBrightness);
+    assign(ParameterIDs::amplitudeRatio,edit.ratio);assign(ParameterIDs::invert,edit.invert?1.f:0.f);assign(ParameterIDs::noiseFill,edit.compensation);
+    assign(ParameterIDs::fftSize,edit.fftSize==1024?0.f:edit.fftSize==2048?1.f:2.f);assign(ParameterIDs::fftScale,edit.scaleMode==1?1.f:0.f);assign(ParameterIDs::frequencyPreset,(float)juce::jmax(0,edit.scaleMode-1));
+    const float tops[]={20000,24000,22050,48000};int range=0;for(int i=1;i<4;++i)if(std::abs(tops[i]-edit.displayTop)<std::abs(tops[range]-edit.displayTop))range=i;
+    assign(ParameterIDs::frequencyRange,(float)range);changingScaleControl=false;syncFrequencyScale();
+    // 状态3 只画打印范围和 Delete 提示，不显示源图；等用户拖动或改参数
+    // 退回状态1 时，才按 imagePath 把图片重新摆到打印范围上。
+    auto& box=spectrumView->getImageBox();
+    if(processor.filePlayerMode){
+        spectrumView->sourcePrintId=edit.id;
+        if(box.getImagePath()!=edit.imagePath){box.clearImage();if(juce::File(edit.imagePath).existsAsFile())box.loadImageFromFile(juce::File(edit.imagePath));else box.setImagePathForRecall(edit.imagePath);}
+        box.setSpectrumPreview({});
+    }else box.clearImage();
+    syncImagePreview();spectrumView->restorePrintView(edit);processor.rememberARAFrequencyChoice();suppressChanges=false;
+}
+spectrumtag::PrintEdit SpectrumTagAudioProcessorEditor::makeEdit(bool previewOnly){
     auto& box=spectrumView->getImageBox();auto& v=processor.getAPVTS();auto value=[&](const juce::String& id){return v.getRawParameterValue(id)->load();};
     spectrumtag::PrintEdit e;e.imagePath=box.getImagePath();e.imageAspect=box.aspect();
     e.start=spectrumView->imageStart();e.duration=(double)box.getWidth()/juce::jmax(1,spectrumView->getContentBounds().getWidth())*spectrumView->timeSpan();
@@ -1663,14 +2928,17 @@ spectrumtag::PrintEdit SpectrumTagAudioProcessorEditor::makeEdit(){
     e.fftSize=1024<<juce::jlimit(0,2,(int)value(ParameterIDs::fftSize));e.rows=e.fftSize/2+1;e.cols=juce::jlimit(4,4096,box.getWidth());
     e.ratio=value(ParameterIDs::amplitudeRatio);e.compensation=value(ParameterIDs::noiseFill);e.invert=value(ParameterIDs::invert)>.5f;
     e.imageMode=(int)value(ParameterIDs::imageMode);e.amount=value(ParameterIDs::imageAmount);
-    e.mask=std::make_shared<const std::vector<float>>(box.generateMask(e.rows,e.cols,e.scaleMode,e.low*nyquist,e.high*nyquist));return e;
+    e.imageStyle=(int)value(ParameterIDs::imageStyle);e.grayContrast=value(ParameterIDs::imageGrayContrast);e.grayBrightness=value(ParameterIDs::imageGrayBrightness);
+    if(previewOnly){e.rows=juce::jmin(e.rows,e.imageStyle==1?1025:257);e.cols=juce::jmin(e.cols,256);}
+    e.mask=std::make_shared<const std::vector<float>>(box.generateMask(e.rows,e.cols,e.scaleMode,e.low*nyquist,e.high*nyquist,previewOnly));return e;
 }
 spectrumtag::PrintEdit SpectrumTagAudioProcessorEditor::editedSelection(bool rebuildMask){
-    auto e=*spectrumView->selectedPrint();
+    auto e=spectrumView->stagedPlacement?spectrumView->stagedPlacement.value():spectrumView->selectedPrint().value();
     e.fillVersion=1;
     auto& v=processor.getAPVTS();auto value=[&](const juce::String& id){return v.getRawParameterValue(id)->load();};auto& box=spectrumView->getImageBox();
     const int fft=1024<<juce::jlimit(0,2,(int)value(ParameterIDs::fftSize));
-    const bool newMask=pendingFrequency||e.imagePath!=box.getImagePath()||e.imageMode!=(int)value(ParameterIDs::imageMode)||e.amount!=value(ParameterIDs::imageAmount)||e.fftSize!=fft;
+    const bool newMask=pendingFrequency||e.imagePath!=box.getImagePath()||e.imageMode!=(int)value(ParameterIDs::imageMode)||e.amount!=value(ParameterIDs::imageAmount)||e.fftSize!=fft
+        ||e.imageStyle!=(int)value(ParameterIDs::imageStyle)||e.grayContrast!=value(ParameterIDs::imageGrayContrast)||e.grayBrightness!=value(ParameterIDs::imageGrayBrightness);
     if(pendingDuration){const float speed=value(ParameterIDs::speed);e.duration*=e.speed/speed;e.speed=speed;e.viewZoom=spectrumView->zoom();}
     if(pendingFrequency){
         auto source=processor.recording().snapshot();const float nyquist=(float)(source?source->sampleRate:juce::jmax(44100.,processor.getSampleRate()))*.5f;
@@ -1688,90 +2956,360 @@ spectrumtag::PrintEdit SpectrumTagAudioProcessorEditor::editedSelection(bool reb
             e.speed=value(ParameterIDs::speed);e.viewZoom=1;
         }
     }
-    e.imagePath=box.getImagePath();e.imageMode=(int)value(ParameterIDs::imageMode);e.amount=value(ParameterIDs::imageAmount);e.fftSize=fft;e.rows=fft/2+1;
+    e.imagePath=box.getImagePath();e.imageMode=(int)value(ParameterIDs::imageMode);e.amount=value(ParameterIDs::imageAmount);e.fftSize=fft;
+    e.imageStyle=(int)value(ParameterIDs::imageStyle);e.grayContrast=value(ParameterIDs::imageGrayContrast);e.grayBrightness=value(ParameterIDs::imageGrayBrightness);
     e.ratio=value(ParameterIDs::amplitudeRatio);e.compensation=value(ParameterIDs::noiseFill);e.invert=value(ParameterIDs::invert)>.5f;
-    if(newMask){auto source=processor.recording().snapshot();const float nyquist=(float)(source?source->sampleRate:48000)*.5f;
+    if(newMask&&box.hasImage()){e.rows=fft/2+1;auto source=processor.recording().snapshot();const float nyquist=(float)(source?source->sampleRate:48000)*.5f;
         // Use the latest completed B/W image while dragging, at preview resolution.
         // The final full mask is generated once the gesture is committed.
-        if(!rebuildMask){e.rows=juce::jmin(e.rows,257);e.cols=juce::jmin(e.cols,256);}
+        if(!rebuildMask){e.rows=juce::jmin(e.rows,e.imageStyle==1?1025:257);e.cols=juce::jmin(e.cols,256);}
         e.mask=std::make_shared<const std::vector<float>>(box.generateMask(e.rows,e.cols,e.scaleMode,e.low*nyquist,e.high*nyquist,!rebuildMask));}
     return e;
 }
-void SpectrumTagAudioProcessorEditor::updateSelectedPrint(){
-    if(!spectrumView->selectedPrint())return;auto e=editedSelection(true);
-    processor.recording().add(e,e.id);spectrumView->setPreview(e,true,pendingDuration||pendingPresetTiming);
+void SpectrumTagAudioProcessorEditor::finishSelectedPreview(){
+    if(spectrumView->selectedPrint())spectrumView->stagePlacement(editedSelection(false));
 }
+void SpectrumTagAudioProcessorEditor::updateStandalonePreview(){
+    if(!processor.filePlayerMode)return;
+    const auto source=processor.recording().snapshot();
+    if(source!=standalonePreviewSource){standalonePreviewSource=source;standalonePreviewDirty=true;}
+    auto& box=spectrumView->getImageBox();
+    const bool placing=spectrumView->imageStage()==SpectrumView::ImageStage::Placing&&box.hasImage();
+    if(placing){
+        const double start=spectrumView->imageStart();
+        const double duration=box.getWidth()*spectrumView->timeSpan()/juce::jmax(1,spectrumView->getContentBounds().getWidth());
+        if(start!=standalonePreviewStart||duration!=standalonePreviewDuration){
+            standalonePreviewStart=start;standalonePreviewDuration=duration;standalonePreviewDirty=true;
+        }
+    }
+    if(!standalonePreviewDirty)return;
+    standalonePreviewDirty=false;
+    const bool simulateSource=simulateImage;
+    if(pendingSelected&&spectrumView->selectedPrint()){
+        const auto edit=editedSelection(false);
+        spectrumView->setPreview(edit,false,pendingDuration||pendingPresetTiming);
+        if(spectrumView->imageVisible&&simulateSource&&source)
+            box.setSpectrumPreview(spectrumView->currentPreviewImage());
+    }else if(simulateSource&&source&&spectrumView->imageVisible){
+        if(spectrumView->stagedPlacement)
+            box.setSpectrumPreview(spectrumView->currentPreviewImage());
+        else if(placing&&!source->empty())
+            box.setSpectrumPreview(spectrumtag::printPreview(*source,makeEdit(true),selectedPalette,true));
+    }else box.setSpectrumPreview({});
+}
+void SpectrumTagAudioProcessorEditor::showImageArtwork(){
+    simulateImage=false;
+    auto& box=spectrumView->getImageBox();
+    if(box.spectrumPreview.isValid())box.setSpectrumPreview({});
+}
+void SpectrumTagAudioProcessorEditor::toggleStandaloneImage(bool centreOnShow){
+    if(!processor.filePlayerMode||standalonePrintJob)return;
+    beginChange();
+    const bool show=!spectrumView->imageVisible;
+    if(show&&centreOnShow){
+        // Place the current artwork independently of the last selected stamp.
+        // Keep the current parameters when leaving its uncommitted preview.
+        if(spectrumView->sourcePrintId.isNotEmpty())standaloneCopyOrigin=spectrumView->sourcePrintId;
+        spectrumView->selectEdit({});spectrumView->sourcePrintId={};placementId={};
+        spectrumView->discardPlacement();
+        auto& box=spectrumView->getImageBox();
+        box.setNormalisedBounds(box.getNormalisedBounds().withCentre({.5f,.5f}));
+    }
+    retainHiddenParameters=!show;
+    spectrumView->imageVisible=show;
+    showImageArtwork();standalonePreviewDirty=true;
+    spectrumView->refreshCanvas();spectrumView->repaint();
+    if(show)spectrumView->focusVisibleImage();
+    updateImageStyleControls();
+    changed();finishChange(true);
+}
+void SpectrumTagAudioProcessorEditor::setStandalonePrinting(bool printing){
+    for(auto* control:std::initializer_list<juce::Component*>{&fftSizeCombo,&fftScaleCombo,&frequencyRangeCombo,
+        &speedSlider,&amplitudeSlider,&imageModeCombo,&imageStyleCombo,&imageAmountSlider,
+        &imageGrayBrightnessSlider,&imageGrayContrastSlider,&invertToggle,&noiseFillSlider,&imageVisibilityButton})
+        control->setEnabled(!printing);
+    spectrumView->getImageBox().setInterceptsMouseClicks(!printing,!printing);
+    if(!printing)spectrumView->renderingPrint.reset();
+    spectrumView->refreshCanvas();
+}
+
+void SpectrumTagAudioProcessorEditor::submitStandalonePrint(){
+    if(standalonePrintJob||processor.isClearPending())return;
+    auto& engine=processor.recording();
+    const auto source=engine.snapshot();
+    auto& box=spectrumView->getImageBox();
+    if(!engine.isEnabled()||!source||source->empty()||!box.hasImage())return;
+    finishChange(true);syncImagePreview();persistEditorStateToProcessor();
+    const auto before=processor.captureUserState();
+    const auto selected=spectrumView->selectedPrint();
+    if((selected&&!spectrumView->stagedPlacement)||(!selected&&!spectrumView->imageVisible))return;
+    auto edit=selected?editedSelection(true):makeEdit();
+    if(selected&&spectrumView->stagedPlacement){
+        edit.rows=edit.fftSize/2+1;
+        edit.cols=juce::jlimit(4,4096,box.getWidth());
+        const float nyquist=(float)source->sampleRate*.5f;
+        edit.mask=std::make_shared<const std::vector<float>>(box.generateMask(edit.rows,edit.cols,edit.scaleMode,edit.low*nyquist,edit.high*nyquist));
+    }
+    juce::String replace=selected?selected->id:juce::String();
+    if(!selected&&standaloneCopyOrigin.isEmpty()){
+        for(const auto& old:*before.document.edits){
+            if(std::abs(old.start-edit.start)<1./source->sampleRate&&std::abs(old.low-edit.low)<1.e-5f&&std::abs(old.high-edit.high)<1.e-5f){
+                replace=old.id;edit.id=replace;break;
+            }
+        }
+    }
+    if(!edit.valid())return;
+    engine.add(edit,replace);
+    const auto submitted=engine.edits();
+    if(std::none_of(submitted->begin(),submitted->end(),[&](const auto& e){return spectrumtag::sameEdit(e,edit);}))return;
+    engine.setDisplayFft(edit.fftSize);
+    const bool scheduled=submitted!=before.document.edits;
+    standaloneCopyOrigin={};retainHiddenParameters=false;spectrumView->stagedPlacement.reset();showImageArtwork();
+    spectrumView->selectEdit(edit.id);placementId=edit.id;spectrumView->sourcePrintId=edit.id;
+    if(!scheduled)spectrumView->imageVisible=false;
+    spectrumView->alignImageToPrint(edit);
+    spectrumView->setPreview(scheduled?std::optional<spectrumtag::PrintEdit>(edit):std::nullopt,scheduled);
+    persistEditorStateToProcessor();stableState=processor.captureUserState();
+    if(scheduled){
+        standalonePrintJob=StandalonePrintJob{before,stableState};
+        spectrumView->renderingPrint=edit;setStandalonePrinting(true);
+    }else processor.commitUserChange(before,stableState);
+}
+
+void SpectrumTagAudioProcessorEditor::finishStandalonePrint(bool cancel){
+    if(!standalonePrintJob)return;
+    auto& engine=processor.recording();
+    auto& job=*standalonePrintJob;
+    const auto source=engine.snapshot();
+    const bool ours=source&&job.before.document.source&&source->sourceId==job.before.document.source->sourceId
+        &&engine.edits()==job.after.document.edits;
+    if(ours){
+        if(cancel){
+            if(!engine.cancelSubmittedPrint(job.after.document.edits,job.before.document))return;
+            processor.setEditorState(job.before.editor);
+            restoreEditorStateFromProcessor();
+            spectrumView->refreshCanvas();
+        }else{
+            // Finishing the computation and publishing its audio happen on the
+            // worker. Do not put a cancelled or superseded Print in undo history.
+            if(source->edits.size()!=job.after.document.edits->size()||
+               !std::equal(source->edits.begin(),source->edits.end(),job.after.document.edits->begin(),spectrumtag::sameEdit))return;
+            if(spectrumView->renderingPrint)spectrumView->rememberPrintBackground(*spectrumView->renderingPrint,*job.before.document.source);
+            spectrumView->imageVisible=false;
+            job.after.editor.imageVisible=false;
+            processor.commitUserChange(std::move(job.before),std::move(job.after));
+        }
+    }
+    standalonePrintJob.reset();setStandalonePrinting(false);
+    persistEditorStateToProcessor();stableState=processor.captureUserState();
+    if(cancel)spectrumView->focusVisibleImage();
+}
+
 void SpectrumTagAudioProcessorEditor::onPrintClicked(){
+    if(processor.filePlayerMode){submitStandalonePrint();return;}
     processor.pollTransportTimeout();
+    // ARA needs host audio. The standalone can print on its silent canvas.
+    if(!processor.filePlayerMode&&processor.isLoadMode()&&!processor.hasLoadedAudio()){
+        finishChange(true);
+        processor.cancelPrint();
+        if(auto* trigger=processor.getPrintTriggerParam())if(trigger->get())trigger->setValueNotifyingHost(0);
+        lastSeenTrigger=false;
+        spectrumView->flashAudioHint();
+        return;
+    }
     if(!processor.recording().isEnabled()&&!processor.isTransportAdvancing()){
         processor.cancelPrint();
         if(auto* trigger=processor.getPrintTriggerParam())if(trigger->get())trigger->setValueNotifyingHost(0);
         lastSeenTrigger=false;printButton.setEnabled(true);return;
     }
-    if(processor.isPrintRunning()||!spectrumView->getImageBox().hasImage())return;
+    // 只有“未打印”的图片对象可以打印；已打印对象要修改必须退回未打印态。
+    if(processor.isPrintRunning())return;
+    if(spectrumView->imageStage()!=SpectrumView::ImageStage::Placing
+        &&!(processor.filePlayerMode&&spectrumView->imageVisible&&spectrumView->getImageBox().hasImage()))return;
     finishChange(true);beginChange();syncImagePreview();
     if(processor.recording().isEnabled()){
-        auto source=processor.recording().snapshot();if(!source||source->empty()){finishChange(true);return;}
-        const auto hideSource=[this]{imageVisible=false;spectrumView->setImageVisible(false);imageVisibilityButton.setToggleState(false,juce::dontSendNotification);};
-        if(auto selected=spectrumView->selectedPrint()){hideSource();pendingSelected=true;finishChange(true);return;}
-        auto e=makeEdit();if(!processor.filePlayerMode&&(e.start>=source->end()||e.start+e.duration<=source->start())){finishChange(true);return;}
-        if(processor.filePlayerMode&&juce::jmax(source->end(),e.start+e.duration)-juce::jmin(source->start(),e.start)>juce::jmin(900.,64000000./source->sampleRate)){finishChange(true);return;}
-        auto edits=processor.recording().edits();juce::String replacement=placementId;
-        if(edits)for(const auto& old:*edits)if(old.id==replacement||(std::abs(old.start-e.start)<1./source->sampleRate&&std::abs(old.low-e.low)<1e-5&&std::abs(old.high-e.high)<1e-5)){replacement=old.id;break;}
-        if(replacement.isNotEmpty())e.id=replacement;
-        hideSource();placementId=e.id;processor.recording().add(e,replacement);spectrumView->selectEdit(e.id);changed();finishChange(true);spectrumView->setPreview(e,true);return;
+        // 渲染完成后对象只剩频谱里的挖空：源图随打印一起收起。
+        printPlacingObject();changed();finishChange(true);return;
     }
     auto e=makeEdit();if(auto* trig=processor.getPrintTriggerParam())if(!trig->get())trig->setValueNotifyingHost(1);
-    processor.markPrintClickAndBeginMathLog();processor.startPrint(std::vector<float>(*e.mask),e.rows,e.cols,e.low,e.high,e.duration);printButton.setEnabled(false);finishChange(true);
+    processor.markPrintClickAndBeginMathLog();processor.startPrint(std::vector<float>(*e.mask),e.rows,e.cols,e.low,e.high,e.duration);
+    spectrumView->getImageBox().clearImage();spectrumView->selectEdit({});placementId={};printButton.setEnabled(false);finishChange(true);
 }
 
 void SpectrumTagAudioProcessorEditor::persistEditorStateToProcessor(){
     if(!spectrumView)return;auto& box=spectrumView->getImageBox();auto s=processor.getEditorState();
-    s.palette=selectedPalette;s.imageVisible=imageVisible;s.chinese=chineseTips;s.uiScale=uiScale;s.placementId=placementId;
+    // imagePath 只保存“未打印/聚焦”对象：已打印未聚焦时源图已销毁，状态里不该再有它。
+    s.palette=selectedPalette;s.imageVisible=processor.filePlayerMode?spectrumView->imageVisible:box.hasImage();s.chinese=chineseTips;s.uiScale=uiScale;s.placementId=placementId;
+    if(processor.filePlayerMode){
+        s.standaloneDraft=spectrumView->stagedPlacement;s.standaloneCopyOrigin=standaloneCopyOrigin;
+        s.retainHiddenParameters=retainHiddenParameters;
+    }
     s.imagePath=box.getImagePath();auto n=box.getNormalisedBounds();s.imgRectXNorm=n.getX();s.imgRectYNorm=n.getY();s.imgRectWNorm=n.getWidth();s.imgRectHNorm=n.getHeight();s.imgBoxWidthPx=(float)box.getWidth();s.spectrumHeightPx=spectrumView->getContentBounds().getHeight();
     s.hasValidValues=true;spectrumView->saveView(s);processor.setEditorState(s);
 }
 void SpectrumTagAudioProcessorEditor::restoreEditorStateFromProcessor(){
-    if(!spectrumView)return;spectrumView->setPreview({});auto s=processor.getEditorState();bool previous=suppressChanges;suppressChanges=true;lastStateRevision=processor.getStateRevision();
-    selectPalette(s.palette,false);imageVisible=s.imageVisible;chineseTips=s.chinese;placementId=s.placementId;
+    if(!spectrumView)return;spectrumView->stagedPlacement.reset();spectrumView->setPreview({});auto s=processor.getEditorState();bool previous=suppressChanges;suppressChanges=true;lastStateRevision=processor.getStateRevision();
+    selectPalette(s.palette,false);chineseTips=s.chinese;placementId=s.placementId;
+    if(processor.filePlayerMode){spectrumView->imageVisible=s.imageVisible;spectrumView->sourcePrintId=s.placementId;standaloneCopyOrigin=s.standaloneCopyOrigin;}
 #if !SPECTRUMTAG_ARA
         if(!processor.filePlayerMode)setSize(juce::roundToInt(kDefaultWidth*s.uiScale),juce::roundToInt(kDefaultHeight*s.uiScale));
 #endif
-    spectrumView->setImageVisible(imageVisible);imageVisibilityButton.setToggleState(imageVisible,juce::dontSendNotification);
+    // 状态里没有 imagePath 就代表没有“未打印/聚焦”对象：已打印对象只存在于
+    // 录音的 Print 列表里，所以这里必须清空源图，否则删除过的图片会复活。
+    // 旧存档把“隐藏的源图”记成 imageVisible=0：新模型里对象只有未打印（可见）
+    // 与聚焦（可见）两种带图状态，这种隐藏图没有对象归属，直接丢弃。
     auto& box=spectrumView->getImageBox();
-    if(box.getImagePath()!=s.imagePath){box.clearImage();if(juce::File(s.imagePath).existsAsFile())box.loadImageFromFile(juce::File(s.imagePath));else box.setImagePathForRecall(s.imagePath);}
-    if(s.hasValidValues)box.setNormalisedBounds({s.imgRectXNorm,s.imgRectYNorm,s.imgRectWNorm,s.imgRectHNorm});
+    const bool legacyHidden=!processor.filePlayerMode&&!s.imageVisible&&s.selectedPrint.isEmpty();
+    const auto restoredPath=legacyHidden?juce::String():s.imagePath;
+    if(box.getImagePath()!=restoredPath){box.clearImage();if(juce::File(restoredPath).existsAsFile())box.loadImageFromFile(juce::File(restoredPath));else box.setImagePathForRecall(restoredPath);}
+    if(s.hasValidValues&&box.hasImage())box.setNormalisedBounds({s.imgRectXNorm,s.imgRectYNorm,s.imgRectWNorm,s.imgRectHNorm});
     spectrumView->setScaleMode(processor.getFrequencyScale());spectrumView->restoreView(s);
-    syncImagePreview();refreshLanguage();suppressChanges=previous;pendingChange=pendingSelected=pendingDuration=pendingFrequency=pendingPresetTiming=false;
+    syncImagePreview();refreshLanguage();suppressChanges=previous;
+    pendingChange=pendingRevert=pendingSelected=pendingDuration=pendingFrequency=pendingPresetTiming=false;
+    showImageArtwork();
+    retainHiddenParameters=processor.filePlayerMode&&s.retainHiddenParameters;
+    box.setSpectrumPreview({});
+    if(processor.filePlayerMode&&s.standaloneDraft&&spectrumView->selectedEdit()==s.standaloneDraft->id&&spectrumView->selectedPrint())
+        spectrumView->stagePlacement(*s.standaloneDraft);
+    standalonePreviewDirty=true;
 }
 void SpectrumTagAudioProcessorEditor::selectPalette(int index,bool remember){
-    selectedPalette=juce::jlimit(0,7,index);spectrumView->setPalette(selectedPalette);
+    standalonePreviewDirty=true;selectedPalette=juce::jlimit(0,7,index);spectrumView->setPalette(selectedPalette);
     for(int i=0;i<8;++i)if(paletteButtons[i])paletteButtons[i]->setToggleState(i==selectedPalette,juce::dontSendNotification);
     if(remember)spectrumtag::Preferences::remember(nullptr,&selectedPalette);persistEditorStateToProcessor();
 }
+bool SpectrumTagAudioProcessorEditor::loadImageObject(const juce::File& file){
+    // 没有音频就没有可打印的画布：拒绝导入，只提示先加载音频。
+    if(standalonePrintJob)return false;
+    if(!audioReady()){spectrumView->flashAudioHint();return false;}
+    // 同一时间只允许一个未打印对象：已有未打印图片时，先把上一张打印进频谱。
+    if(!processor.filePlayerMode&&spectrumView->imageStage()==SpectrumView::ImageStage::Placing)printPlacingObject();
+    auto& box=spectrumView->getImageBox();
+    const auto target=processor.filePlayerMode&&spectrumView->imageVisible?spectrumView->selectedPrint():std::nullopt;
+    if(!box.loadImageFromFile(file))return false;
+    if(processor.filePlayerMode&&!target){
+        spectrumView->selectEdit({});
+        spectrumView->discardPlacement();
+    }
+    // 彩色图片自动切到灰度（像黑白照片一样连续衰减），线稿/黑白图保持二值。
+    // 灰度对比/亮度按这张图重新拟合，不继承上一张的参数；用户随后仍可手动调整。
+    const bool colour=box.sourceHasColour();
+    auto assign=[&](const juce::String& id,float value){
+        auto* parameter=processor.getAPVTS().getParameter(id);if(parameter==nullptr)return;
+        const float normalised=juce::jlimit(0.0f,1.0f,parameter->convertTo0to1(value));
+        if(std::abs(parameter->getValue()-normalised)<1.0e-6f)return;
+        parameter->beginChangeGesture();parameter->setValueNotifyingHost(normalised);parameter->endChangeGesture();
+    };
+    assign(ParameterIDs::imageStyle,colour?1.0f:0.0f);
+    if(colour){
+        const auto tone=box.grayTone();
+        assign(ParameterIDs::imageGrayContrast,tone.contrast);
+        assign(ParameterIDs::imageGrayBrightness,tone.brightness);
+    }
+    // 缓存一份副本，删除原文件后对象仍能回填。
+    const auto folder=spectrumtag::Preferences::file().getParentDirectory().getChildFile("Images");
+    const auto cached=folder.getChildFile(juce::Uuid().toString()+file.getFileExtension());
+    if(folder.createDirectory().wasOk()&&file.copyFileTo(cached))box.setImagePathForRecall(cached.getFullPathName());
+    syncImagePreview();
+    if(target){
+        auto replacement=makeEdit(true);
+        replacement.id=target->id;
+        spectrumView->stagePlacement(replacement);
+    }else{
+        spectrumView->selectEdit({});placementId={};spectrumView->sourcePrintId={};
+    }
+    if(processor.filePlayerMode){
+        spectrumView->imageVisible=true;
+        const auto path=box.getImagePath(),directory=file.getParentDirectory().getFullPathName();
+        spectrumtag::Preferences::remember(&path,nullptr,nullptr,nullptr,&directory);
+        retainHiddenParameters=false;simulateImage=target.has_value();
+    }
+    standalonePreviewDirty=true;
+    spectrumView->refreshCanvas();
+    return true;
+}
 void SpectrumTagAudioProcessorEditor::imagePicked(const juce::File& file){
-    imageVisible=true;spectrumView->setImageVisible(true);imageVisibilityButton.setToggleState(true,juce::dontSendNotification);
-    auto path=file.getFullPathName();
-    const auto folder=spectrumtag::Preferences::file().getParentDirectory().getChildFile("Images");const auto cached=folder.getChildFile(juce::Uuid().toString()+file.getFileExtension());
-    if(folder.createDirectory().wasOk()&&file.copyFileTo(cached)){path=cached.getFullPathName();spectrumView->getImageBox().setImagePathForRecall(path);}
-    spectrumtag::Preferences::remember(&path,nullptr);syncImagePreview();changed();persistEditorStateToProcessor();
+    finishChange(true);beginChange();
+    if(!loadImageObject(file)){finishChange(true);return;}
+    changed();finishChange(true);
+}
+// Ctrl+拖动图片：原对象留在原位变成 Print，拖走的是同样的副本。
+// 撤销步由这次手势松手时的 onGestureEnd 一起提交。
+void SpectrumTagAudioProcessorEditor::duplicateImageObject(){
+    auto& box=spectrumView->getImageBox();
+    if(!box.hasImage()||spectrumView->imageStage()!=SpectrumView::ImageStage::Placing)return;
+    const juce::File file(box.getImagePath());
+    if(!file.existsAsFile())return;
+    // 打印不成立（没有可打印的音频）时保持原样，退化成普通拖动。
+    if(!printPlacingObject())return;
+    box.loadImageFromFile(file);
+    spectrumView->selectEdit({});placementId={};
+    syncImagePreview();spectrumView->refreshCanvas();changed();
+}
+// Ctrl+C：记录当前对象的图片。聚焦的 Print 用它记录的原图，未打印对象用图片框里的图。
+bool SpectrumTagAudioProcessorEditor::copyImageObject(){
+    juce::String path;
+    if(const auto edit=spectrumView->selectedPrint())path=edit->imagePath;
+    else if(spectrumView->getImageBox().hasImage())path=spectrumView->getImageBox().getImagePath();
+    if(path.isEmpty()||!juce::File(path).existsAsFile())return false;
+    clipboardImagePath=path;
+    copyButtonPaste=true;refreshCopyButton();
+    return true;
+}
+// Ctrl+V：以当前播放位置为左边缘新建一份副本。正在聚焦的对象先取消聚焦，
+// 它本身已经打印在频谱里（等于自动打印），图片框腾出来放新对象；
+// 若还有未打印的图片对象，loadImageObject 会先把它打印掉。
+bool SpectrumTagAudioProcessorEditor::pasteImageObject(){
+    if(clipboardImagePath.isEmpty())return false;
+    const juce::File file(clipboardImagePath);
+    if(!file.existsAsFile())return false;
+    const double at=processor.audition().position();
+    finishChange(true);beginChange();
+    if(spectrumView->selectedPrint()){
+        // 与“点空白处取消聚焦”一致：打印留在频谱里，图片框腾空准备接新对象。
+        spectrumView->selectEdit({});placementId={};
+        spectrumView->getImageBox().clearImage();
+        spectrumView->refreshCanvas();
+    }
+    if(!loadImageObject(file)){finishChange(true);refreshCopyButton();return false;}
+    spectrumView->placeImageStartAt(at);
+    copyButtonPaste=false;
+    changed();finishChange(true);
+    refreshCopyButton();
+    return true;
+}
+// 复制按钮：平时是「复制」（等同 Ctrl+C），记录好之后变成「粘贴」（等同 Ctrl+V）。
+void SpectrumTagAudioProcessorEditor::refreshCopyButton(){
+    const bool paste=copyButtonPaste&&clipboardImagePath.isNotEmpty();
+    copyImageButton.setButtonText(juce::String::fromUTF8(paste?(chineseTips?"粘贴":"Paste"):(chineseTips?"复制":"Copy")));
+    copyImageButton.setTooltip(juce::String::fromUTF8(paste
+        ?(chineseTips?"粘贴：结束当前聚焦，并在播放位置新建一份副本。快捷键 Ctrl+V。"
+                     :"Paste: end the current focus and create a copy at the playhead. Shortcut: Ctrl+V.")
+        :(chineseTips?"复制当前图片对象，随后可在播放位置粘贴副本。快捷键 Ctrl+C。"
+                     :"Copy the current image object, then paste a copy at the playhead. Shortcut: Ctrl+C.")));
 }
 void SpectrumTagAudioProcessorEditor::refreshLanguage(){
     auto tr=[this](const char* zh,const char* en){return juce::String::fromUTF8(chineseTips?zh:en);};lookAndFeel.setChinese(chineseTips);
     diagnosticsButton.setButtonText(tr("导出诊断","Diagnostics"));
     diagnosticsButton.setTooltip(tr("复现问题后保存诊断 JSON：仅包含系统、参数和显示状态，不包含音乐、图片、工程或截图，不会自动上传。","After reproducing a problem, save diagnostic JSON containing system, parameter and display status only. No audio, images, projects or screenshots; never uploaded automatically."));
-    for(auto* l:{&fftSizeLabel,&fftScaleLabel,&speedLabel,&amplitudeLabel,&invertLabel,&imageModeLabel,&imageAmountLabel,&noiseFillLabel,&frequencyRangeLabel})l->setFont(chineseTips?juce::Font(juce::FontOptions(spectrumtag::ui::chineseFontName(),18.f,juce::Font::plain)):juce::Font(basementTypeface).withHeight(18));
+    for(auto* l:{&fftSizeLabel,&fftScaleLabel,&speedLabel,&amplitudeLabel,&invertLabel,&imageStyleLabel,&imageGrayContrastLabel,&imageGrayBrightnessLabel,&imageModeLabel,&imageAmountLabel,&noiseFillLabel,&frequencyRangeLabel})l->setFont(chineseTips?spectrumtag::ui::chineseFont(18.f):juce::Font(basementTypeface).withHeight(18));
     fftSizeLabel.setText(tr("FFT 大小：","FFT Size:"),juce::dontSendNotification);fftScaleLabel.setText(tr("频率刻度：","FFT scale:"),juce::dontSendNotification);
     speedLabel.setText(tr("速度：","Speed:"),juce::dontSendNotification);amplitudeLabel.setText(tr("保留音量：","Amplitude Ratio:"),juce::dontSendNotification);
-    imageModeLabel.setText(tr("图像黑白转换：","Image B/W:"),juce::dontSendNotification);imageAmountLabel.setText(tr("黑白强度：","B/W amount:"),juce::dontSendNotification);
+    imageStyleLabel.setText(tr("图像风格：","Image style:"),juce::dontSendNotification);
+    imageStyleCombo.changeItemText(1,tr("Logo 模式","Logo mode"));imageStyleCombo.changeItemText(2,tr("复杂图像模式","Complex image"));
+    imageStyleCombo.setSelectedId(1+(int)*processor.getAPVTS().getRawParameterValue(ParameterIDs::imageStyle),juce::dontSendNotification);
+    imageGrayContrastLabel.setText(tr("灰度对比：","Gray contrast:"),juce::dontSendNotification);
+    imageGrayBrightnessLabel.setText(tr("灰度亮度：","Gray brightness:"),juce::dontSendNotification);
+    imageModeLabel.setText(tr("阈值方式：","Threshold:"),juce::dontSendNotification);imageAmountLabel.setText(tr("阈值强度：","Strength:"),juce::dontSendNotification);
     invertLabel.setText(tr("反转：","Invert:"),juce::dontSendNotification);noiseFillLabel.setText(tr("噪声补偿：","Noise Fill:"),juce::dontSendNotification);frequencyRangeLabel.setText(tr("显示上限：","Range:"),juce::dontSendNotification);
     imageModeCombo.changeItemText(1,tr("自动阈值","Auto (Otsu)"));imageModeCombo.changeItemText(2,tr("保留细节","Detail (Adaptive)"));imageModeCombo.changeItemText(3,tr("手动阈值","Manual"));imageModeCombo.changeItemText(4,tr("透明度轮廓","Alpha silhouette"));
     fftScaleCombo.changeItemText(1,tr("线性","Linear"));fftScaleCombo.changeItemText(2,tr("对数","Log"));fftScaleCombo.changeItemText(7,tr("扩展对数","Extended Log"));
     imageModeCombo.setSelectedId(1+(int)*processor.getAPVTS().getRawParameterValue(ParameterIDs::imageMode),juce::dontSendNotification);
     fftScaleCombo.setSelectedId(1+processor.getFrequencyScale(),juce::dontSendNotification);
     imageModeCombo.sendLookAndFeelChange();fftScaleCombo.sendLookAndFeelChange();
-    removePrintButton.setButtonText(tr("删除","Delete"));clearRecordButton.setButtonText(processor.isLoadMode()?tr("清空","Clear"):tr("清空录音","Clear Record"));previousPrintButton.setButtonText(tr("上一个打印","Previous Print"));nextPrintButton.setButtonText(tr("下一个打印","Next Print"));
-    recordButton.setButtonText(processor.isLoadMode()?tr("加载","Load"):tr("录音","Record"));printButton.setButtonText(tr("打印","Print"));printButton.setTypeface(chineseTips?juce::Font(juce::FontOptions(spectrumtag::ui::chineseFontName(),32.f,juce::Font::bold)).getTypefacePtr():basementTypeface);
+    removePrintButton.setButtonText(tr("删除","Delete"));previousPrintButton.setButtonText(tr("上一个打印","Previous Print"));nextPrintButton.setButtonText(tr("下一个打印","Next Print"));
+    refreshCopyButton();
+    recordButton.setButtonText(processor.isLoadMode()?tr("加载音频","Load audio"):tr("录音","Record"));printButton.setButtonText(tr("打印","Print"));printButton.setTypeface(chineseTips?spectrumtag::ui::chineseTypeface():basementTypeface);printButton.setTypeScale(chineseTips?spectrumtag::ui::chineseScale:1.0f);
     spectrumView->setChinese(chineseTips);tooltipLanguageButton.setButtonText(juce::String::fromUTF8(chineseTips?"中文":"EN"));updateTooltips();resized();repaint();
 }
 void SpectrumTagAudioProcessorEditor::updateTooltips(){
@@ -1782,7 +3320,7 @@ void SpectrumTagAudioProcessorEditor::updateTooltips(){
 #else
     uiScaleCombo.setTooltip(tr("整体界面缩放 75–250%；右下角可等比例拖动。","Scale the whole UI from 75–250%; drag the lower-right corner for a custom size."));
 #endif
-    frequencyRangeCombo.setTooltip(tr("频率显示上限，默认 20 kHz。选中 Print 时重新渲染；未选中时只改变视图。最高不超过采样率的一半。","Display ceiling, default 20 kHz, capped at half the sample rate. Rerenders the selected Print; otherwise only changes the view."));
+    frequencyRangeCombo.setTooltip(tr("频率显示上限，默认 22.05 kHz。选中 Print 时重新渲染；未选中时只改变视图。最高不超过采样率的一半。","Display ceiling, default 22.05 kHz, capped at half the sample rate. Rerenders the selected Print; otherwise only changes the view."));
     recordButton.setTooltip(tr("按 DAW 时间位置录制原始音频。再次点击停止。未录到的位置播放原轨输入。","Capture original audio at DAW timeline positions. Click again to stop. Unrecorded positions play the original input."));
     clearRecordButton.setTooltip(tr("清除插件录音、打印和补偿噪声，回到未录制模式。可撤销。","Clear the plugin recording, Prints and added noise; return to live mode. Undo restores them."));
     removePrintButton.setTooltip(tr("删除选中打印及其补偿噪声，保留其他打印。快捷键 Delete。","Delete the selected Print and its noise, retaining other Prints. Shortcut: Delete."));
@@ -1791,21 +3329,29 @@ void SpectrumTagAudioProcessorEditor::updateTooltips(){
     fftScaleCombo.setTooltip(tr("线性、Mel、Bark、对数、扩展对数，以及 insight。insight 保持当前显示上限，按参考截图匹配频率和时间（约 18 秒视窗），Speed 使用统一单位，自动填入匹配值后可手动调整。通用刻度只改频率、不改当前时间速度；扩展对数下限为 10 Hz。选中 Print 时重新渲染；未选中时只改变视图。","Linear, Mel, Bark, Log, Extended Log or insight. insight keeps the current Range and fills in a matched Speed value using the same time unit as every other mode; adjust Speed afterwards. Reference insight window: about 18 s from the screenshot. Generic scales retain the current time speed; Extended Log starts at 10 Hz. Rerenders a selected Print; otherwise only changes the view."));
     speedSlider.setTooltip(tr("统一时间缩放，所有频率刻度下相同数值代表相同速度。2x 覆盖的时长为 1x 的一半；右侧显示当前视窗覆盖的秒数。选中打印后会调整其时长；拖动结束后合并渲染最终结果。图片始终保持原比例。","Unified time scale: the same value means the same speed in every frequency mode. 2x covers half as much time as 1x. Window shows the actual visible duration in seconds. A selected Print changes duration; final rendering follows after dragging ends. Image preview keeps its original aspect ratio."));
     amplitudeSlider.setTooltip(tr("打印区域保留音量 0–33%。数值越大，图案越淡。拖动结束后更新渲染。","Remaining gain, 0–33%. Higher values soften the image. Final rendering follows after dragging ends."));
-    imageModeCombo.setTooltip(tr("自动、局部细节、手动阈值，或透明度轮廓。透明度轮廓适合透明背景图标。","Automatic, adaptive detail, manual threshold, or alpha silhouette for transparent artwork."));
-    imageAmountSlider.setTooltip(tr("黑白强度，默认 0.5。Alt+左键或双击恢复默认。","B/W amount; default 0.5. Alt-left-click or double-click resets."));
+    imageStyleCombo.setTooltip(tr("Logo 模式：按阈值把图片取成实心形状，适合标志和线稿；复杂图像模式：按每个像素的明暗连续衰减，效果像黑白照片，适合照片和插画。拖入彩色图片会自动选择复杂图像模式。","Logo mode: threshold the artwork into a solid shape for logos and line art; Complex image: continuous per-pixel attenuation like a black-and-white photo, for photos and illustrations. Colour images select Complex image automatically."));
+    imageGrayContrastSlider.setTooltip(tr("灰度对比：0.5 为中性，越大暗部更暗、亮部更亮。Alt+左键或双击恢复默认。","Gray contrast: 0.5 is neutral; higher values deepen shadows and lift highlights. Alt-click or double-click resets."));
+    imageGrayBrightnessSlider.setTooltip(tr("灰度亮度：整体提亮或压暗灰度映射，0.5 为中性。","Gray brightness: lifts or lowers the grayscale mapping; 0.5 is neutral."));
+    imageModeCombo.setTooltip(tr("Logo 模式的形状提取方式：自动、局部细节、手动阈值，或透明度轮廓。透明度轮廓适合透明背景图标。","Shape extraction for Logo mode: automatic, adaptive detail, manual threshold, or alpha silhouette for transparent artwork."));
+    imageAmountSlider.setTooltip(tr("Logo 模式的阈值强度，默认 0.5。Alt+左键或双击恢复默认。","Threshold strength for Logo mode; default 0.5. Alt-left-click or double-click resets."));
     invertToggle.setTooltip(tr("同步反转预览和打印。","Invert both preview and Print."));
     noiseFillSlider.setTooltip(tr("仅录音模式可用。只在图片范围内能量不足的亮区补充白噪声。删除打印时一起删除。","Recorded mode only. Add white noise to weak bright areas inside the image. Deleting the Print removes its noise."));
     const auto fineTip=tr(" 按住 Shift 拖动或滚轮可微调（1/10 速度）。"," Hold Shift while dragging or scrolling for fine adjustment (1/10 speed).");
-    for(auto* slider:{&speedSlider,&amplitudeSlider,&imageAmountSlider,&noiseFillSlider})slider->setTooltip(slider->getTooltip()+fineTip);
+    for(auto* slider:{&speedSlider,&amplitudeSlider,&imageAmountSlider,&imageGrayContrastSlider,&imageGrayBrightnessSlider,&noiseFillSlider})slider->setTooltip(slider->getTooltip()+fineTip);
     printButton.setTooltip(tr("未录音时仅在播放期间实时试听；停止时点击不执行，也不排队。录音后隐藏原图，在图片位置显示模拟图形和渲染进度，完成后显示真实频谱。同一位置重复打印不会叠加。","Before recording, Print auditions only while playing; stopped clicks do nothing and are not queued. Recorded mode hides the source image and shows a simulation with render progress at its position, then the actual spectrum. Repeating Print replaces without stacking."));
-    imageVisibilityButton.setTooltip(tr("显示 / 隐藏图片。拖入新图会自动显示。","Show / hide the image. Dropping a new image shows it automatically."));
-    auto navigation=tr("滚轮左右浏览；Shift 或 Ctrl+滚轮只缩放时间视图。单击已打印图形只选择并恢复原比例，不移动指针；点击非打印区域才定位。可拖动位置，松手后渲染。Speed 拉杆修改打印时长。右上角图标全览录音范围，右键显示 / 隐藏原图；指针可超出该范围并显示方向和时间；播放中点击可内部试听，未录到的间隙静音。停止时点空白，下次播放跟随 DAW。","Wheel pans time; Shift or Ctrl-wheel scales the time view only. Click a Print to select and restore its aspect without moving the playhead; only empty spectrum seeks. Drag to move and render on release. The Speed slider edits Print duration. The top-right icon fits the recorded range; right-click shows / hides the source image; an outside cursor shows its direction and time. Click during playback to audition; uncaptured local gaps are silent. A stopped empty click makes the next Play follow the DAW.");
-#if SPECTRUMTAG_ARA
-    navigation=tr("滚轮左右浏览；Shift 或 Ctrl+滚轮缩放时间视图。点击频谱或全览会请求 DAW 移动播放指针。右上角图标全览已加载范围，右键显示 / 隐藏原图。单击打印只选择并恢复原比例，不移动指针；点击非打印区域才定位。拖动后松手渲染；Speed 拉杆修改打印时长。", "Wheel pans; Shift or Ctrl-wheel zooms time. Click the spectrum or overview to request a DAW playhead move. The top-right icon fits loaded events; right-click shows / hides the source image. Click a Print to select and restore its aspect without moving the playhead; only empty spectrum seeks. Drag and release to render; the Speed slider changes Print duration.");
-#endif
-    navigation+=tr(" 选中打印后拖动右下角可等比例缩放；拖动时模拟预览，松手后渲染，Ctrl+Z 撤销。", " Drag the selected Print's lower-right handle to resize proportionally. Preview while dragging, render on release; Ctrl+Z undoes.");
-    spectrumView->setTooltip(navigation);spectrumView->getImageBox().setTooltip(tr("拖动移动，右下角等比缩放，双击换图。","Drag to move; lower-right corner resizes proportionally. Double-click to load an image.")+"\n"+navigation);
+    auto navigation=tr("滚轮左右浏览；Shift 或 Ctrl+滚轮只缩放时间视图。单击已打印的图形会聚焦它并显示原图与边框；点击非打印区域定位并取消聚焦。图片下方按钮把图片打印进频谱；聚焦后任何拖动或参数修改都会撤掉这次打印、回到未打印状态，需要重新打印。Ctrl+拖动图片＝原位留一份打印、拖走同样的副本；Ctrl+C 记录当前对象，Ctrl+V 随时可在播放位置新建副本，正在聚焦的对象会保留为打印并取消聚焦。Ctrl+Z 撤销。下方波形可按住拖动连续定位；拖动白框左右两端可缩放时间视图（等同 Speed / Ctrl+滚轮）。","Wheel pans time; Shift or Ctrl-wheel scales the time view only. Click a Print to focus it and reveal the source image with its frame; clicking elsewhere seeks and unfocuses. The button under the image prints it into the spectrum; once focused, any drag or parameter change removes that Print and returns to the unprinted state, so print again afterwards. Ctrl-drag the image leaves a Print in place and drags a copy; Ctrl+C copies the current object, Ctrl+V creates a copy at the playhead at any time, keeping a focused Print printed and unfocusing it. Ctrl+Z undoes. Drag the overview waveform to scrub; drag either edge of its white view box to zoom the time view (same as Speed / Ctrl-wheel).");
+    spectrumView->setTooltip(navigation);spectrumView->getImageBox().setTooltip(tr("拖动移动，右下角等比缩放，Ctrl+拖动留下一份副本，单击或双击换图。","Drag to move; lower-right corner resizes proportionally; Ctrl-drag leaves a copy behind; click or double-click to load an image.")+"\n"+navigation);
+    spectrumView->setPrintButtonTooltip(tr("把这张图片打印进频谱。打印后图片隐藏，点击频谱里的位置可以重新聚焦并查看边框。","Print this picture into the spectrum. The image is hidden afterwards; click its position in the spectrum to focus it again."));
     if(processor.filePlayerMode){
+        imageVisibilityButton.setTooltip(tr("显示或隐藏原图，也可右键切换。","Show or hide the source image. Right-click also toggles it."));
+        frequencyRangeCombo.setTooltip(tr("显示频率上限，默认为 20 kHz。","Upper display frequency. The default is 20 kHz."));
+        imageStyleCombo.setTooltip(tr("切换模式先看转换结果：Logo 显示黑白图，复杂图像显示灰度图。调整参数时实时预览频谱效果。","Switch styles to see the conversion: black and white for Logo, grayscale for Complex image. Adjust a parameter to preview the spectrum."));
+        const auto liveHelp=tr("右键显示或隐藏图片。在空白处调出的图片位于视图中央。图片模式下拖动参数可预览频谱，松手回到黑白图或灰度图。隐藏图片后，选中的打印图案保留频谱预览。点「打印」应用修改。",
+            "Right-click to show or hide the image. In empty space the image appears at the centre. Drag a parameter to preview the spectrum. Release to see the converted image again. With the image hidden, the selected Print keeps its spectrum preview. Click Print to apply.");
+        speedSlider.setTooltip(tr("调整速度可实时预览时长，点击打印后应用。","Preview the duration at this Speed. Click Print to apply.")+fineTip);
+        amplitudeSlider.setTooltip(tr("实时预览打印区域的保留音量，点击打印后应用。","Preview the remaining gain inside the image. Click Print to apply.")+fineTip);
+        frequencyRangeCombo.setTooltip(tr("实时预览频率上限，默认 20 kHz。点击打印后应用到选中的图案。","Preview the frequency ceiling, default 20 kHz. Click Print to apply to the selected image."));
+        spectrumView->setTooltip(liveHelp);spectrumView->getImageBox().setTooltip(liveHelp);
         recordButton.setTooltip(tr("选择本地音频或视频音轨；也可直接拖入文件。", "Choose local audio or a video soundtrack, or drag a file into the window."));
         clearRecordButton.setTooltip(tr("清空加载的音频及打印；Ctrl+Z 可撤销。", "Clear loaded audio and Prints; Ctrl+Z restores them."));
         printButton.setTooltip(tr("将图片渲染到音频内或前后空白处；空白处由噪声补偿生成声音，导出时包含延长的部分，视频相应补黑帧。删除打印会撤回对应延长。最多 15 分钟 / 6400 万采样，使用导出按原格式保存。", "Print inside audio or empty time before/after it. Noise Fill supplies sound in silence; Export includes the extension and pads video with black frames. Deleting the Print removes its extension. Limit: 15 minutes / 64M samples. Export keeps the source format."));

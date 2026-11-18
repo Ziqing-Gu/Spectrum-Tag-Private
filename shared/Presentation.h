@@ -28,7 +28,7 @@ inline juce::Colour spectrumColour(int palette,float t) {
         (t-positions[(size_t)end-1])/(positions[(size_t)end]-positions[(size_t)end-1]));
 }
 struct Preferences {
-    juce::String imagePath;
+    juce::String imagePath,imageDirectory;
     int palette=0;
     bool chineseTips=true;
     float uiScale=1.0f;
@@ -46,17 +46,24 @@ struct Preferences {
         if(auto xml=juce::XmlDocument::parse(file())) {
             p.uiScale=juce::jlimit(.75f,2.5f,(float)xml->getDoubleAttribute("uiScale",1.0));
             p.imagePath=xml->getStringAttribute("lastImage");
+            p.imageDirectory=xml->getStringAttribute("lastImageDirectory");
             p.chineseTips=xml->getBoolAttribute("chineseTips",true);
             p.palette=juce::jlimit(0,7,xml->getIntAttribute("palette",0));
         }
         return p;
     }
-    static bool remember(const juce::String* image, const int* colour, const bool* language=nullptr, const float* scale=nullptr) {
+    static juce::File imageChooserDirectory(){
+        const auto directory=read().imageDirectory;
+        if(directory.isNotEmpty()&&juce::File(directory).isDirectory())return juce::File(directory);
+        return juce::File::getSpecialLocation(juce::File::userPicturesDirectory);
+    }
+    static bool remember(const juce::String* image, const int* colour, const bool* language=nullptr, const float* scale=nullptr,const juce::String* directory=nullptr) {
         juce::InterProcessLock lock("SpectrumTagPreferences");
         if(!lock.enter(200))return false;
         const auto p=read();juce::XmlElement xml("SpectrumTagPreferences");
         xml.setAttribute("uiScale",scale?juce::jlimit(.75f,2.5f,*scale):p.uiScale);
         xml.setAttribute("lastImage",image?*image:p.imagePath);
+        xml.setAttribute("lastImageDirectory",directory?*directory:p.imageDirectory);
         xml.setAttribute("chineseTips",language?*language:p.chineseTips);
         xml.setAttribute("palette",colour?juce::jlimit(0,7,*colour):p.palette);
         const auto f=file();const bool ok=f.getParentDirectory().createDirectory().wasOk()&&f.replaceWithText(xml.toString());

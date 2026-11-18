@@ -1,12 +1,18 @@
-# Spectrum Tag（私人）
+# SpectrumTag
+
+> ### 特别感谢 / Special Thanks — [@Ziqing-Gu](https://github.com/Ziqing-Gu)
+>
+> 从 1.4.4 到 1.4.27，录音与 Print 编辑、专用 ARA 版本、独立版重构、频谱视频导出，以及 Windows / macOS 全套安装包与跨平台验证，几乎都由 **Ziqing-Gu** 完成。这些工作全部无偿贡献给本项目 —— 没有他的投入，就没有今天这个版本。谢谢！
+>
+> From 1.4.4 through 1.4.27, **Ziqing-Gu** built nearly everything: recorded and editable Prints, the dedicated ARA edition, the rebuilt standalone, spectrum video export, and the full Windows / macOS installer and cross-platform validation pipeline. All of it was contributed to this project for free. This release would not exist without him. Thank you!
 
 **把图片打印进声音的频谱。 / Print images into the spectrum of sound.**
 
-[中文](#中文) · [English](#english) · [下载 / Downloads](https://github.com/Ziqing-Gu/Spectrum-Tag-Private/releases) · [更新记录 / Changelog](CHANGELOG.md) · [开发总览 / Development overview](PROJECT_OVERVIEW.md)
+[中文](#中文) · [English](#english) · [下载 / Downloads](https://github.com/sweetorange1/SpectrumTag/releases) · [更新记录 / Changelog](CHANGELOG.md) · [开发总览 / Development overview](PROJECT_OVERVIEW.md)
 
-基于 [sweetorange1 / SpectrumTag](https://github.com/sweetorange1/SpectrumTag)，原作者 **iisaacbeats.cn**。本仓库是 **Ziqing-Gu 维护的 Fork**，保留原项目署名与 AGPL-3.0 许可。
+[SpectrumTag](https://github.com/sweetorange1/SpectrumTag) 由 **iisaacbeats.cn / sweetorange1** 创作。1.4.4–1.4.27 的录音编辑、ARA、独立版与跨平台改进由 **Ziqing-Gu** 贡献（详见上方致谢），保留原作者署名与 AGPL-3.0 许可。
 
-Based on [sweetorange1 / SpectrumTag](https://github.com/sweetorange1/SpectrumTag), originally by **iisaacbeats.cn**. This is the **Ziqing-Gu fork**, retaining the original attribution and AGPL-3.0 license.
+[SpectrumTag](https://github.com/sweetorange1/SpectrumTag) was created by **iisaacbeats.cn / sweetorange1**. Recording/editing, ARA, standalone and cross-platform improvements through 1.4.4–1.4.27 are contributed by **Ziqing-Gu** (see the dedication above), retaining the original attribution and AGPL-3.0 license.
 
 ## 中文
 
@@ -18,12 +24,13 @@ SpectrumTag 将图片转换成黑白掩模，并通过处理音频的频率成�
 
 | 项目 | 当前状态 |
 | --- | --- |
-| 当前交付 | **1.4.28 Stable**，Windows Setup 与 macOS Universal PKG，附中文文件名的安装说明和英文 TXT |
-| 用户指定 Stable | **1.4.28**（2026-11-09），新 Plan B 已完成并冻结；见 [Stable / Plan B 记录](docs/STABLE_1.4.28.md) |
+| 当前源码版本 | **2.0.3**（2026-11-16），图像风格改为 Logo 模式 / 复杂图像模式并只显示当前模式可用的控件；含右键上下文操作、打印式透明预览与灰度衰减；安装包尚未重新构建 |
+| 最近交付 | **1.4.28 Stable**，Windows Setup 与 macOS Universal PKG，附中文文件名的安装说明和英文 TXT |
+| 贡献者指定 Stable | **1.4.28**（2026-11-09），新 Plan B 已完成并冻结；见 [Stable / Plan B 记录](docs/STABLE_1.4.28.md) |
 | Windows 安装包 | 实时 VST3、ARA 专用 VST3、独立程序；适用于 Windows 10/11 x64 |
 | macOS 安装包 | 实时/ARA VST3、实时/ARA AU、独立 App；目标为 macOS 15+，Apple Silicon + Intel |
 
-下载 [1.4.28 安装包与 TXT 说明](https://github.com/Ziqing-Gu/Spectrum-Tag-Private/releases/tag/v1.4.28)。Windows 实际安装、安装后媒体/横竖视频/UI 检查、两个 Mac 架构的音视频及 AU/VST3 检查、Universal PKG 实际安装均已通过，详见[验证记录](docs/INSTALLERS_1.4.28.md)。完整下载包保留 `安装说明.txt` 的中文文件名。**自动化验证不代表所有 DAW 已逐一实测。** 1.4.27 安装包保留为回滚版本；本轮插件音频打印逻辑不变。开发入口与验证边界见[合并交接](docs/UPSTREAM_HANDOFF_1.4.28.md)。
+供审阅的 [1.4.28 安装包与 TXT 说明](https://github.com/Ziqing-Gu/Spectrum-Tag-Private/releases/tag/v1.4.28) 发布在贡献者的 Fork；上游正式发布由原作者决定。Windows 实际安装、安装后媒体/横竖视频/UI 检查、两个 Mac 架构的音视频及 AU/VST3 检查、Universal PKG 实际安装均已通过，详见[验证记录](docs/INSTALLERS_1.4.28.md)。完整下载包保留 `安装说明.txt` 的中文文件名。**自动化验证不代表所有 DAW 已逐一实测。** 1.4.27 安装包保留为回滚版本；本轮插件音频打印逻辑不变。开发入口与验证边界见[合并交接](docs/UPSTREAM_HANDOFF_1.4.28.md)。
 
 ### 三个版本怎么选？
 
@@ -40,7 +47,7 @@ SpectrumTag 将图片转换成黑白掩模，并通过处理音频的频率成�
 - **图像转换**：自动阈值 Otsu、局部自适应、手动阈值和透明度剪影；支持黑白强度、反转及效果预览。
 - **可编辑 Print**：移动、右下角等比例缩放、修改参数、删除、撤销与重做。拖动时先显示预览，再后台计算；同位置重新 Print 不叠加加深，删除同时移除对应补偿噪声。
 - **噪声补偿**：为静音或能量不足的频段合成目标频谱，补偿量可调，仅作用于 Print 范围。独立版空白打印需要提高 Noise Fill 才会生成声音。
-- **频谱视图**：默认 Mel (RX)、20 kHz；提供 Linear、Bark、Log、Extended Log 和 insight。共用时间尺度，insight 不改变显示上限；实际频率受采样率限制。
+- **频谱视图**：默认 Mel (RX)、22.05 kHz（显示上限下拉框暂时隐藏，参数仍按 22.05 kHz 生效）；提供 Linear、Bark、Log、Extended Log 和 insight。共用时间尺度，insight 不改变显示上限；实际频率受采样率限制。
 - **操作与外观**：8 种记忆配色、中英文界面和悬停说明、原图显示/隐藏、录音/加载范围全览。原图始终保持正确长宽比。
 - **恢复与缓存**：保存 Print 编辑及处理缓存；独立版可恢复上次会话。可用缓存能够避免重复渲染，缓存缺失或内容变化时会重新分析；无法恢复的媒体静默留空。
 
@@ -62,9 +69,13 @@ Print 可以超出原始文件的开始或结尾，导出时长会相应延长�
 | 单击已打印图形 | 选中并恢复其参数和正常显示比例，不移动播放指针 |
 | 拖动已选 Print / 右下角 | 移动位置 / 等比例缩放 |
 | 双击原图 | 选择新图片 |
-| 频谱右键 / 眼睛图标 | 显示或隐藏原图 |
+| 右侧「图像风格」 | Logo 模式：按阈值把图片取成实心形状；复杂图像模式：按每个像素的明暗连续衰减，效果像黑白照片。拖入彩色图片自动选复杂图像模式，并按这张图的亮度分布重新拟合对比 / 亮度（默认偏重、纯黑必扣净）。切换模式后只显示当前模式可调的控件 |
+| 频谱右键 | 状态1（未打印）时打印；状态3（聚焦）时退回图片模式；没有聚焦对象时聚焦离点击处最近的已打印图形 |
 | 频谱右上角全览图标 | 适应已录制/加载的范围 |
 | Delete | 删除选中的 Print |
+| Ctrl + 拖动图片 | 原对象留在原位打印，拖走同样的副本 |
+| Ctrl+C / Ctrl+V | 记录当前对象 / 在播放位置新建副本；正被聚焦的对象会保留为打印并自动取消聚焦 |
+| 「删除」右侧的复制按钮 | 等同 Ctrl+C，记录后按钮变为「粘贴」，再按等同 Ctrl+V |
 | Ctrl+Z / Ctrl+Shift+Z | 撤销 / 重做 |
 | Shift 拖动参数 / Alt+左键 | 微调 / 恢复默认值 |
 
@@ -87,7 +98,7 @@ Print 可以超出原始文件的开始或结尾，导出时长会相应延长�
 .\build-standalone-windows.ps1 -BuildDir D:\Codex\Temp\SpectrumTag-Standalone -RuntimeDir D:\Dependencies\SpectrumTagRuntime
 ```
 
-Windows 独立版的 RuntimeDir 需要 `ffmpeg.exe`、`COPYING.GPLv3` 和 `FFmpeg-NOTICE.txt`，构建时嵌入 EXE。Mac 的 [Cross-platform installers](.github/workflows/cross-platform.yml) 工作流分别构建两个架构，再合并并制作 PKG。当前安装入口位于 [packaging](packaging)，旧安装脚本和旧 Standalone 实现仅作历史参考。
+Windows 独立版的 RuntimeDir 需要 `ffmpeg.exe`、`COPYING.GPLv3` 和 `FFmpeg-NOTICE.txt`，构建时嵌入 EXE。Mac 独立版需要先运行 `./packaging/macos/fetch-codec.sh [--arch all]`（或 `-DSPECTRUMTAG_MACOS_CODEC=/path/to/ffmpeg`），构建时自动把编码器写入 `SpectrumTag.app/Contents/Helpers/<arch>/`；缺少时配置阶段会警告，导出会提示编码器缺失。Mac 的 [Cross-platform installers](.github/workflows/cross-platform.yml) 工作流分别构建两个架构，再合并并制作 PKG。当前安装入口位于 [packaging](packaging)，旧安装脚本和旧 Standalone 实现仅作历史参考。
 
 - [项目总览与完整开发过程](PROJECT_OVERVIEW.md)
 - [逐版更新](CHANGELOG.md)
@@ -106,12 +117,13 @@ SpectrumTag converts an image to a monochrome mask and processes audio frequenci
 
 | Item | Status |
 | --- | --- |
-| Current delivery | **1.4.28 Stable**, Windows Setup and macOS Universal PKG with Chinese/English TXT installation guides |
-| User-designated Stable | **1.4.28** (2026-11-09); the new Plan B snapshot is complete and frozen. See the [Stable / Plan B record](docs/STABLE_1.4.28.md). |
+| Current source version | **2.0.3** (2026-11-16), image styles renamed to Logo mode / Complex image with only the active mode's controls shown; includes the right-click context actions, print-like transparent preview and grayscale attenuation; installers not rebuilt yet |
+| Latest delivery | **1.4.28 Stable**, Windows Setup and macOS Universal PKG with Chinese/English TXT installation guides |
+| Contributor-designated Stable | **1.4.28** (2026-11-09); the new Plan B snapshot is complete and frozen. See the [Stable / Plan B record](docs/STABLE_1.4.28.md). |
 | Windows installer | Realtime VST3, dedicated ARA VST3 and standalone; Windows 10/11 x64 |
 | macOS installer | Realtime/ARA VST3, realtime/ARA AU and standalone App; macOS 15+, Apple Silicon + Intel |
 
-Download the [1.4.28 installers and TXT guides](https://github.com/Ziqing-Gu/Spectrum-Tag-Private/releases/tag/v1.4.28). Actual Windows installation and installed media/video/UI checks, native media/AU/VST3 checks on both Mac architectures, and Universal PKG installation have passed; see the [verification record](docs/INSTALLERS_1.4.28.md). The complete download bundle preserves the Chinese filename `安装说明.txt`. **Automated checks do not constitute field validation of every DAW.** The 1.4.27 installers remain available for rollback; plugin audio Print processing is unchanged in this release. See the [merge handoff](docs/UPSTREAM_HANDOFF_1.4.28.md) for entry points and boundaries.
+Review the [1.4.28 installers and TXT guides](https://github.com/Ziqing-Gu/Spectrum-Tag-Private/releases/tag/v1.4.28) in the contributor's fork; the original author decides upstream publication. Actual Windows installation and installed media/video/UI checks, native media/AU/VST3 checks on both Mac architectures, and Universal PKG installation have passed; see the [verification record](docs/INSTALLERS_1.4.28.md). The complete download bundle preserves the Chinese filename `安装说明.txt`. **Automated checks do not constitute field validation of every DAW.** The 1.4.27 installers remain available for rollback; plugin audio Print processing is unchanged in this release. See the [merge handoff](docs/UPSTREAM_HANDOFF_1.4.28.md) for entry points and boundaries.
 
 ### Choose your edition
 
@@ -128,7 +140,7 @@ Realtime internal audition does not move the DAW cursor. When following the host
 - **Image conversion:** Otsu, adaptive, manual threshold and alpha silhouette, with amount, invert and processing previews.
 - **Editable Prints:** move, resize proportionally from the corner, change parameters, delete, undo and redo. Edits show a preview before background rendering; printing again at the same position replaces the prior operation, and deletion removes its Noise Fill too.
 - **Noise Fill:** adjustable target-spectrum synthesis for silent or weak frequency content, confined to the Print area. Source-free standalone Prints need nonzero Noise Fill to produce sound.
-- **Spectrum display:** Mel (RX) and 20 kHz by default; Linear, Bark, Log, Extended Log and insight are available. All share a time scale; insight leaves Range unchanged, and the source sample rate limits usable frequencies.
+- **Spectrum display:** Mel (RX) and 22.05 kHz by default (the Range dropdown is temporarily hidden; the parameter still applies); Linear, Bark, Log, Extended Log and insight are available. All share a time scale; insight leaves Range unchanged, and the source sample rate limits usable frequencies.
 - **Interface:** eight remembered palettes, Chinese/English controls and tooltips, source-image visibility and recorded/loaded-range overview. The original image retains its aspect ratio.
 - **Persistence:** saved edits and content-checked render caches, plus standalone session restoration. Missing or changed caches require analysis; unavailable media restores to a blank workspace without a missing-file prompt.
 
@@ -150,9 +162,13 @@ Prints may extend before or after the source. Export duration expands accordingl
 | Click a printed shape | Select it and recall its parameters and normal display proportions without seeking |
 | Drag a selected Print / its lower-right corner | Move / resize proportionally |
 | Double-click the original image | Choose another image |
-| Right-click the spectrum / eye icon | Toggle the original image |
+| Image style (right panel) | Logo mode: threshold the artwork into a solid shape; Complex image: continuous per-pixel attenuation like a black-and-white photo. Colour images switch to Complex image automatically and re-fit contrast / brightness from that image's tonal range (biased darker, pure black always fully cut). Only the controls for the active mode are shown |
+| Right-click the spectrum | Print in state 1 (unprinted); return to image mode in state 3 (focused); with nothing focused, focus the printed shape nearest the click |
 | Top-right overview icon | Fit the recorded/loaded range |
 | Delete | Remove the selected Print |
+| Ctrl-drag the image | Leave a Print in place and drag a copy |
+| Ctrl+C / Ctrl+V | Copy the current object / create a copy at the playhead; a focused object stays printed and unfocuses |
+| Copy button right of Delete | Same as Ctrl+C; it turns into Paste, which then acts as Ctrl+V |
 | Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
 | Shift-drag a parameter / Alt-click | Fine adjustment / reset to default |
 
@@ -165,7 +181,7 @@ Read [English TXT instructions](docs/INSTALL-EN.txt) or [安装说明（中文 T
 - There is no Windows publisher signature or Apple Developer ID signing/notarization. Mac bundles are ad-hoc signed. The guides cover system prompts, rescanning, duplicate versions, Logic ARA/Rosetta and fonts.
 - ARA requires a compatible host and the correct extension entry point. OnlyARA metadata cannot guarantee hiding from every host's ordinary insert menu. Automated validation is distinct from testing real projects in every DAW.
 
-Build with CMake 3.22+, C++17 and JUCE 8.0.15, using Visual Studio 2022 on Windows or Xcode command-line tools on Mac. See the Windows commands above. The standalone Windows codec input contains `ffmpeg.exe`, `COPYING.GPLv3` and `FFmpeg-NOTICE.txt`; it is embedded at build time. [Cross-platform installers](.github/workflows/cross-platform.yml) builds both Mac architectures and merges them into a PKG. Current packaging scripts are in [packaging](packaging).
+Build with CMake 3.22+, C++17 and JUCE 8.0.15, using Visual Studio 2022 on Windows or Xcode command-line tools on Mac. See the Windows commands above. The standalone Windows codec input contains `ffmpeg.exe`, `COPYING.GPLv3` and `FFmpeg-NOTICE.txt`; it is embedded at build time. The Mac standalone requires `./packaging/macos/fetch-codec.sh [--arch all]` (or `-DSPECTRUMTAG_MACOS_CODEC=/path/to/ffmpeg`); the build writes the codec to `SpectrumTag.app/Contents/Helpers/<arch>/`. Without it, configuration warns and exports report a missing codec. [Cross-platform installers](.github/workflows/cross-platform.yml) builds both Mac architectures and merges them into a PKG. Current packaging scripts are in [packaging](packaging).
 
 See the [development overview](PROJECT_OVERVIEW.md), [changelog](CHANGELOG.md), [Windows handoff](docs/WINDOWS_HANDOFF.md) and [Mac/AU handoff](docs/MAC_AU_HANDOFF.md) for implementation details and historical validation boundaries.
 

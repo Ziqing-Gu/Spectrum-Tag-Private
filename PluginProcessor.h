@@ -40,6 +40,10 @@ namespace ParameterIDs
     static const juce::String imageAmount = "imageAmount";
     static const juce::String invert         = "invert";         // Bool
     static const juce::String printTrigger   = "printTrigger";   // Bool（自动化触发 Print，按上升沿）
+    // 灰度模式：0=黑白二值，1=连续灰度。彩色图片拖入时自动选 1。
+    static const juce::String imageStyle     = "imageStyle";
+    static const juce::String imageGrayContrast   = "imageGrayContrast";
+    static const juce::String imageGrayBrightness = "imageGrayBrightness";
 }
 
 class SpectrumTagAudioProcessor : public juce::AudioProcessor,
@@ -128,8 +132,16 @@ public:
     std::function<void(const juce::File&)> onDropAudioFile;
     std::function<void(double)> onFileSeek;
     bool isLoadMode()const{return SPECTRUMTAG_ARA||filePlayerMode;}
+    // True when a real source is available for Print. The standalone keeps a
+    // one-sample "generated" canvas so the empty workspace can still be drawn;
+    // that placeholder is not loaded audio and must not be printed into.
+    bool hasLoadedAudio()const{
+        const auto source=recording().snapshot();
+        if(!source||source->empty())return false;
+        return !(filePlayerMode&&source->sourceId.startsWith("generated:"));
+    }
     void publishFileTransport(bool playing,double seconds){transportAdvancing=playing;auditionTransport.publishExternalPosition(seconds);}
-    void resetFileView(){undoChanges.clear();redoChanges.clear();auto s=getEditorState();s.selectedPrint={};s.placementId={};s.viewValid=false;s.viewFit=false;s.viewFollow=false;s.viewZoom=1;s.viewEnd=0;setEditorState(s);stateRevision.fetch_add(1);}
+    void resetFileView(){undoChanges.clear();redoChanges.clear();auto s=getEditorState();s.selectedPrint={};s.placementId={};s.standaloneCopyOrigin={};s.standaloneDraft.reset();s.retainHiddenParameters=false;s.viewValid=false;s.viewFit=false;s.viewFollow=false;s.viewZoom=1;s.viewEnd=0;setEditorState(s);stateRevision.fetch_add(1);}
     spectrumtag::AuditionTransport& audition() {return auditionTransport;}
     void auditionAt(double seconds) {
         if(filePlayerMode){if(onFileSeek)onFileSeek(seconds);return;}
@@ -151,7 +163,9 @@ public:
         float uiScale=1;
         double viewEnd=0, viewZoom=1;
         bool viewFollow=true, viewFit=false, viewValid=false;
-        juce::String selectedPrint, placementId;
+        juce::String selectedPrint, placementId, standaloneCopyOrigin;
+        bool retainHiddenParameters=false;
+        std::optional<spectrumtag::PrintEdit> standaloneDraft; // Uncommitted editor/undo state.
         float imgRectXNorm = 0.30f;
         float imgRectYNorm = 0.20f;
         float imgRectWNorm = 0.40f;

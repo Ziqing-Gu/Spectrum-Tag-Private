@@ -200,6 +200,9 @@ public:
         processor.recording().restoreDocument({blank,std::make_shared<const std::vector<PrintEdit>>(),true});
     }
     static juce::File sessionFile(){return Preferences::file().getParentDirectory().getChildFile("Standalone/last-session.xml");}
+    // The plot belongs to the same atomic session save as its audio reference.
+    juce::Image resumePlot;
+    int resumePlotRevision=-1;
     bool saveLastSession(){
         if(restoreFailed.load()){auto s=processor.recording().snapshot();if(!s||!s->sourceId.startsWith("generated:")||s->edits.empty())return false;}
         if(!processor.recording().flush(120000))return false;
@@ -210,6 +213,11 @@ public:
         document.setAttribute("schema",1);document.setAttribute("file",currentInfo.file.getFullPathName());document.setAttribute("rate",currentInfo.rate);
         document.setAttribute("channels",currentInfo.channels);document.setAttribute("bits",currentInfo.bits);document.setAttribute("floating",currentInfo.floating);
         document.setAttribute("video",currentInfo.video);document.setAttribute("codec",currentInfo.codec);document.setAttribute("generated",currentInfo.generated);document.addChildElement(xml.release());
+        if(audio&&resumePlotRevision==audio->revision&&resumePlot.isValid()){
+            juce::MemoryOutputStream encoded;juce::JPEGImageFormat jpeg;jpeg.setQuality(.9f);
+            if(jpeg.writeImageToStream(resumePlot,encoded)&&encoded.getDataSize()<2*1024*1024)
+                document.setAttribute("resumePlot",encoded.getMemoryBlock().toBase64Encoding());
+        }
         const auto target=sessionFile();if(target.getParentDirectory().createDirectory().failed())return false;juce::TemporaryFile temporary(target);
         return document.writeTo(temporary.getFile())&&temporary.overwriteTargetFileWithTemporary();
     }
@@ -221,8 +229,16 @@ private:
         if(path.isNotEmpty()&&!juce::File(path).existsAsFile()){restoreFailed=true;return false;}
         FileInfo saved;saved.file=juce::File(xml->getStringAttribute("file"));saved.rate=xml->getDoubleAttribute("rate");saved.channels=xml->getIntAttribute("channels");saved.bits=xml->getIntAttribute("bits",24);saved.floating=xml->getBoolAttribute("floating");saved.video=xml->getBoolAttribute("video");saved.codec=xml->getStringAttribute("codec");
         juce::MemoryBlock data;juce::AudioProcessor::copyXmlToBinary(*state,data);processor.setStateInformation(data.getData(),(int)data.getSize());
+        const auto plot=xml->getStringAttribute("resumePlot");
+        if(path.isNotEmpty()&&plot.isNotEmpty()&&plot.length()<3*1024*1024){
+            juce::MemoryBlock bytes;
+            if(bytes.fromBase64Encoding(plot)){
+                auto image=juce::ImageFileFormat::loadFrom(bytes.getData(),bytes.getSize());
+                if(image.getHeight()>82)resumePlot=std::move(image);
+            }
+        }
         saved.generated=xml->getBoolAttribute("generated",false);
-        Job job;job.restoring=true;job.file=saved.file;job.original=saved;pending=job;working=true;message="Restoring last session...";return true;
+        Job job;job.restoring=true;job.file=saved.file;job.original=saved;pending=job;working=true;info=saved;message=saved.file.getFileName();return true;
     }
     struct Job{bool exporting=false;juce::File file;FileInfo original;bool audioOnly=false,restoring=false;};
     SpectrumTagAudioProcessor& processor;mutable std::mutex mutex;std::optional<Job> pending;FileInfo info;juce::String message,sourceId;

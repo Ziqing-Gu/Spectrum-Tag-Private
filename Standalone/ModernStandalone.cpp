@@ -25,13 +25,16 @@ public:
         format.setSelectedId(options.format+1,juce::dontSendNotification);aspect.setSelectedId(options.aspect+1,juce::dontSendNotification);fps.setSelectedId(options.fps==60?2:1,juce::dontSendNotification);
         updateResolutions();aspect.onChange=[this]{updateResolutions();};
         aspect.setComponentID("videoAspect");resolution.setComponentID("videoResolution");go.setComponentID("videoDestination");
-        for(auto* label:{&formatLabel,&aspectLabel,&resolutionLabel,&fpsLabel}){if(zh)label->setFont(juce::Font(juce::FontOptions(spectrumtag::ui::chineseFontName(),16.f,juce::Font::plain)));addAndMakeVisible(label);}
+        const auto bodyFont=uiFont(15.f);
+        for(auto* label:{&formatLabel,&aspectLabel,&resolutionLabel,&fpsLabel}){label->setFont(bodyFont);label->setColour(juce::Label::textColourId,juce::Colour(0xfff2f2f2));addAndMakeVisible(label);}
         for(auto* combo:{&format,&aspect,&resolution,&fps})addAndMakeVisible(combo);
-        go.setButtonText(juce::String::fromUTF8(zh?"选择保存位置…":"Choose destination…"));addAndMakeVisible(go);
-        go.onClick=[this]{auto next=options;next.format=format.getSelectedId()-1;next.aspect=aspect.getSelectedId()-1;next.resolution=resolution.getSelectedId()-1;next.fps=fps.getSelectedId()==2?60:30;next.remember();onAccept(next);if(auto* window=findParentComponentOfClass<juce::DialogWindow>())window->exitModalState(0);};setSize(440,260);
+        go.setButtonText(juce::String::fromUTF8(zh?"选择保存位置…":"Choose destination..."));go.getProperties().set("spectrumTagStyle","primary");addAndMakeVisible(go);
+        go.onClick=[this]{auto next=options;next.format=format.getSelectedId()-1;next.aspect=aspect.getSelectedId()-1;next.resolution=resolution.getSelectedId()-1;next.fps=fps.getSelectedId()==2?60:30;next.remember();onAccept(next);if(auto* window=findParentComponentOfClass<juce::DialogWindow>())window->exitModalState(0);};setSize(460,272);
     }
-    void resized()override{auto area=getLocalBounds().reduced(18);for(auto pair:{std::make_pair(&formatLabel,&format),std::make_pair(&aspectLabel,&aspect),std::make_pair(&resolutionLabel,&resolution),std::make_pair(&fpsLabel,&fps)}){auto row=area.removeFromTop(42);pair.first->setBounds(row.removeFromLeft(130));pair.second->setBounds(row.reduced(0,5));}area.removeFromTop(12);go.setBounds(area.removeFromTop(34));}
+    void paint(juce::Graphics& g)override{g.fillAll(juce::Colour(0xff1a1c1f));}
+    void resized()override{auto area=getLocalBounds().reduced(20);for(auto pair:{std::make_pair(&formatLabel,&format),std::make_pair(&aspectLabel,&aspect),std::make_pair(&resolutionLabel,&resolution),std::make_pair(&fpsLabel,&fps)}){auto row=area.removeFromTop(44);pair.first->setBounds(row.removeFromLeft(132));pair.second->setBounds(row.reduced(0,6));}area.removeFromTop(10);go.setBounds(area.removeFromTop(36));}
 private:
+    static juce::Font uiFont(float height){if(auto* laf=dynamic_cast<SpectrumTagLookAndFeel*>(&juce::LookAndFeel::getDefaultLookAndFeel()))return laf->getUiFont(height);return juce::Font(juce::FontOptions(height));}
     void updateResolutions(){
         const int selected=resolution.getSelectedId()>0?resolution.getSelectedId():options.resolution+1;
         auto next=options;next.aspect=aspect.getSelectedId()-1;next.normalise();
@@ -51,17 +54,38 @@ juce::File defaultExportFolder(){return juce::File::getSpecialLocation(juce::Fil
 class Player final : public juce::AudioAppComponent,private juce::Timer {
 public:
     SpectrumTagAudioProcessor processor;
-    explicit Player(bool enableAudio=true){
+    SpectrumTagLookAndFeel lookAndFeel;
+    explicit Player(bool enableAudio=true,bool rememberSession=true){
+        juce::LookAndFeel::setDefaultLookAndFeel(&lookAndFeel);
+        lookAndFeel.setChinese(processor.getEditorState().chinese);
         processor.filePlayerMode=true;processor.filePlayerVersion=ProjectInfo::versionString;processor.onLoadAudioFile=[this]{chooseAudio();};processor.onDropAudioFile=[this](const juce::File& f){load(f);};
         processor.onFileSeek=[this](double seconds){const auto s=processor.recording().snapshot();if(s){const double t=juce::jlimit(s->start(),s->end(),seconds);seek=t;processor.publishFileTransport(playing,t);}};
-        session=std::make_unique<Session>(processor,enableAudio);editor.reset(processor.createEditor());addAndMakeVisible(*editor);
-        for(auto* button:{&play,&stop,&exportButton,&device})addAndMakeVisible(button);addAndMakeVisible(status);
-        play.onClick=[this]{if(auto audio=processor.recording().snapshot()){if(position>=audio->end())seek=audio->start();playing=!playing;}};
-        stop.onClick=[this]{playing=false;processor.publishFileTransport(false,position);};exportButton.onClick=[this]{chooseExport();};
-        device.onClick=[this]{auto* settings=new juce::AudioDeviceSelectorComponent(deviceManager,0,0,1,2,false,false,true,false);settings->setSize(500,400);juce::DialogWindow::LaunchOptions options;options.content.setOwned(settings);options.dialogTitle=processor.getEditorState().chinese?juce::String::fromUTF8("音频设备"):"Audio device";options.dialogBackgroundColour=juce::Colour(0xff1a1c1e);options.useNativeTitleBar=true;options.resizable=false;options.launchAsync();};
-        setSize(1240,722);if(enableAudio)setAudioChannels(0,2);startTimerHz(30);
+        // Preferences initialise a fresh standalone session. A saved session
+        // restores its own range, source and visibility after these defaults.
+        auto initialState=processor.getEditorState();
+        initialState.imagePath=spectrumtag::Preferences::read().imagePath;
+        processor.setEditorState(initialState);
+        auto* range=processor.getAPVTS().getParameter(ParameterIDs::frequencyRange);
+        range->setValueNotifyingHost(range->convertTo0to1(0));
+        session=std::make_unique<Session>(processor,rememberSession);editor.reset(processor.createEditor());addAndMakeVisible(*editor);
+        if(session->resumePlot.isValid())static_cast<SpectrumTagAudioProcessorEditor*>(editor.get())->showResumePlot(std::move(session->resumePlot));
+        addAndMakeVisible(play);addAndMakeVisible(exportButton);addAndMakeVisible(status);
+        exportButton.getProperties().set("spectrumTagStyle","round");
+        status.setColour(juce::Label::textColourId,juce::Colour(0xffbfbfbf));
+        status.setFont(lookAndFeel.getUiFont(14.f));
+        status.setJustificationType(juce::Justification::centredLeft);
+        lastChinese=processor.getEditorState().chinese;
+        play.setTooltip(lastChinese?juce::String::fromUTF8("播放 / 暂停"):"Play / Pause");
+        play.onClick=[this]{if(auto audio=processor.recording().snapshot()){if(position>=audio->end())seek=audio->start();playing=!playing;play.setPlaying(playing.load());}};
+        exportButton.onClick=[this]{chooseExport();};
+        setSize(1240,680);if(enableAudio)setAudioChannels(0,2);startTimerHz(30);
     }
-    ~Player()override{stopTimer();movie.cancel();exportProgress.reset();shutdownAudio();editor.reset();session.reset();processor.onFileSeek={};processor.onLoadAudioFile={};processor.onDropAudioFile={};}
+    ~Player()override{if(&juce::LookAndFeel::getDefaultLookAndFeel()==&lookAndFeel)juce::LookAndFeel::setDefaultLookAndFeel(nullptr);stopTimer();movie.cancel();exportProgress.reset();shutdownAudio();
+        if(auto audio=processor.recording().snapshot()){
+            session->resumePlot=static_cast<SpectrumTagAudioProcessorEditor*>(editor.get())->captureResumePlot();
+            session->resumePlotRevision=audio->revision;
+        }
+        editor.reset();session.reset();processor.onFileSeek={};processor.onLoadAudioFile={};processor.onDropAudioFile={};}
     void prepareToPlay(int size,double sr)override{rate=sr;processor.setRateAndBufferSizeDetails(sr,size);processor.prepareToPlay(sr,size);}
     void releaseResources()override{processor.releaseResources();}
     void getNextAudioBlock(const juce::AudioSourceChannelInfo& output)override{
@@ -72,13 +96,21 @@ public:
         processor.publishFileTransport(playing.load()&&audio!=nullptr,t);
     }
     void resized()override{
-        auto bar=getLocalBounds().removeFromTop(42).reduced(8,5);play.setBounds(bar.removeFromLeft(80));bar.removeFromLeft(6);stop.setBounds(bar.removeFromLeft(80));bar.removeFromLeft(6);exportButton.setBounds(bar.removeFromLeft(90));bar.removeFromLeft(6);device.setBounds(bar.removeFromLeft(100));bar.removeFromLeft(12);status.setBounds(bar);if(editor)editor->setBounds(getLocalBounds().withTrimmedTop(42));
+        if(!editor)return;
+        editor->setBounds(getLocalBounds());
+        // 播放/导出/状态标签都叠放在编辑器上方，落点由编辑器换算。
+        if(auto* concrete=static_cast<SpectrumTagAudioProcessorEditor*>(editor.get())){
+            const auto slots=concrete->standaloneSlots();
+            play.setBounds(slots.play);
+            exportButton.setBounds(slots.exportButton);
+            status.setBounds(slots.fileName);
+        }
     }
     void paint(juce::Graphics& g)override{g.fillAll(juce::Colour(0xff1a1c1e));}
     bool keyPressed(const juce::KeyPress& key)override{if(movie.busy())return true;if(key==juce::KeyPress::spaceKey){play.onClick();return true;}return editor&&editor->keyPressed(key);}
 private:
     std::unique_ptr<juce::AudioProcessorEditor> editor;std::unique_ptr<Session> session;std::unique_ptr<juce::FileChooser> chooser;
-    juce::TextButton play,stop,exportButton,device;juce::Label status;std::atomic<bool> playing{false};std::atomic<double> position{0},seek{std::numeric_limits<double>::quiet_NaN()};double rate=48000;uint64_t seen=0;
+    TransportButton play;juce::TextButton exportButton;juce::Label status;bool lastChinese=false;std::atomic<bool> playing{false};std::atomic<double> position{0},seek{std::numeric_limits<double>::quiet_NaN()};double rate=48000;uint64_t seen=0;
     SpectrumVideoExport movie;SpectrumVideoExport::Stage seenMovieStage=SpectrumVideoExport::idle;juce::File movieTarget;
     std::unique_ptr<ExportProgressWindow> exportProgress;
     void load(const juce::File& file){if(session->busy()||movie.busy())return;playing=false;movieMessage.clear();session->load(file);}
@@ -88,7 +120,7 @@ private:
         if(movie.busy()){movie.cancel();return;}
         if(session->busy()||processor.recording().isBusy()||!processor.recording().snapshot())return;
         const bool zh=processor.getEditorState().chinese;juce::PopupMenu menu;
-        menu.addItem(3,juce::String::fromUTF8(zh?"导出频谱视频…":"Export spectrum video…"));menu.addSeparator();
+        menu.addItem(3,juce::String::fromUTF8(zh?"导出频谱视频…":"Export spectrum video..."));menu.addSeparator();
         const bool video=session->current().video;
         menu.addItem(1,juce::String::fromUTF8(video?(zh?"导出视频（保留画面）":"Export video (keep picture)"):(zh?"导出音频":"Export audio")),session->exportable());
         if(video)menu.addItem(2,juce::String::fromUTF8(zh?"仅导出音频（原音轨格式）":"Export audio only (source codec)"),session->exportable());
@@ -96,7 +128,7 @@ private:
     }
     void chooseMovieSettings(){
         auto options=VideoOptions::remembered();const auto state=processor.getEditorState();options.palette=state.palette;options.chinese=state.chinese;options.scale=processor.getFrequencyScale();options.speed=processor.getAPVTS().getRawParameterValue(ParameterIDs::speed)->load();const float tops[]{20000,24000,22050,48000};options.top=tops[juce::jlimit(0,3,(int)processor.getAPVTS().getRawParameterValue(ParameterIDs::frequencyRange)->load())];
-        juce::DialogWindow::LaunchOptions dialog;dialog.content.setOwned(new VideoSettings(options,[safe=juce::Component::SafePointer<Player>(this)](VideoOptions value){if(safe)safe->chooseMovieFile(value);}));dialog.dialogTitle=juce::String::fromUTF8(options.chinese?"导出频谱视频":"Export spectrum video");dialog.dialogBackgroundColour=juce::Colour(0xff1a1c1e);dialog.useNativeTitleBar=true;dialog.resizable=false;dialog.launchAsync();
+        juce::DialogWindow::LaunchOptions dialog;dialog.content.setOwned(new VideoSettings(options,[safe=juce::Component::SafePointer<Player>(this)](VideoOptions value){if(safe)safe->chooseMovieFile(value);}));dialog.dialogTitle=juce::String::fromUTF8(options.chinese?"导出频谱视频":"Export spectrum video");dialog.dialogBackgroundColour=juce::Colour(0xff1a1c1f);dialog.useNativeTitleBar=true;dialog.resizable=false;dialog.launchAsync();
     }
     void chooseMovieFile(VideoOptions options){
         auto name=session->current().file.getFileNameWithoutExtension();if(name.isEmpty())name="Untitled";
@@ -117,25 +149,35 @@ private:
         if(exportProgress){if(exportProgress->isVisible())exportProgress->update(movie.stage(),movie.progress(),movieTarget.getFullPathName(),movie.error());else exportProgress.reset();}
         if(!movie.busy())session->ensureBlankCanvas();
         if(session->loadedRevision()!=seen){seen=session->loadedRevision();position=0;seek=0;if(!session->restoredLastSession())processor.resetFileView();processor.publishFileTransport(false,0);}
+        if(!session->busy()&&!session->restoredLastSession()&&!processor.recording().snapshot())
+            static_cast<SpectrumTagAudioProcessorEditor*>(editor.get())->showResumePlot({});
         const bool chinese=processor.getEditorState().chinese;auto tr=[&](const char* zh,const char* en){return juce::String::fromUTF8(chinese?zh:en);};
-        play.setButtonText(playing?tr("暂停","Pause"):tr("播放","Play"));stop.setButtonText(tr("停止","Stop"));exportButton.setButtonText(tr("导出","Export"));device.setButtonText(tr("音频设备","Audio device"));
-        auto text=session->status();if(movie.busy()){const auto stage=movie.stage();text=(stage==SpectrumVideoExport::preparing?tr("准备声音…","Preparing audio…"):stage==SpectrumVideoExport::finishing?tr("正在完成视频…","Finalising video…"):tr("导出频谱视频 ","Exporting spectrum video ")+juce::String(juce::roundToInt(movie.progress()*100))+"%");exportButton.setButtonText(tr("取消导出","Cancel export"));}
+        if(chinese!=lastChinese){lastChinese=chinese;lookAndFeel.setChinese(chinese);status.setFont(lookAndFeel.getUiFont(14.f));exportButton.sendLookAndFeelChange();play.setTooltip(chinese?juce::String::fromUTF8("播放 / 暂停"):"Play / Pause");}
+        play.setPlaying(playing.load());
+        exportButton.setButtonText(tr("导出","Export"));
+        auto text=session->status();if(movie.busy()){const auto stage=movie.stage();text=(stage==SpectrumVideoExport::preparing?tr("准备声音…","Preparing audio..."):stage==SpectrumVideoExport::finishing?tr("正在完成视频…","Finalising video..."):tr("导出频谱视频 ","Exporting spectrum video ")+juce::String(juce::roundToInt(movie.progress()*100))+"%");exportButton.setButtonText(tr("取消","Cancel"));}
         else if(seenMovieStage!=movie.stage()){if(movie.stage()==SpectrumVideoExport::complete)text=tr("已导出：","Exported: ")+movieTarget.getFullPathName();else if(movie.stage()==SpectrumVideoExport::cancelled)text=tr("已取消导出","Export cancelled");else if(movie.stage()==SpectrumVideoExport::failed)text=movie.error();movieMessage=text;}
         if(!movie.busy()&&movieMessage.isNotEmpty())text=movieMessage;seenMovieStage=movie.stage();
-        status.setText(text,juce::dontSendNotification);status.setColour(juce::Label::textColourId,juce::Colours::lightgrey);editor->setEnabled(!movie.busy());device.setEnabled(!movie.busy());
+        status.setText(text,juce::dontSendNotification);status.setColour(juce::Label::textColourId,juce::Colour(0xffbfbfbf));editor->setEnabled(!movie.busy());
         auto audio=processor.recording().snapshot();const bool hasContent=audio&&(!session->current().generated||!audio->edits.empty());
         play.setEnabled(!movie.busy()&&!session->busy()&&hasContent);exportButton.setEnabled(movie.busy()||(!session->busy()&&!processor.recording().isBusy()&&hasContent));
+        exportButton.getProperties().set("spectrumTagStyle",movie.busy()?"secondary":"round");
     }
     juce::String movieMessage;
 };
 int filelessUiTest(const juce::File& folder){try{
     folder.createDirectory();auto need=[](bool ok,const char* why){if(!ok)throw std::runtime_error(why);};
     auto wait=[&](auto condition){const auto end=juce::Time::getMillisecondCounter()+30000;do{juce::MessageManager::getInstance()->runDispatchLoopUntil(10);juce::Timer::callPendingTimersSynchronously();if(condition())return;}while((int)(end-juce::Time::getMillisecondCounter())>0);throw std::runtime_error("fileless UI wait timed out");};
-    Player panel(false);auto& processor=panel.processor;wait([&]{return processor.recording().snapshot()&&!processor.recording().isBusy();});
-    auto* image=revision1416::box(panel);auto* print=dynamic_cast<juce::Button*>(revision1416::find(panel,"printButton"));auto* fill=dynamic_cast<juce::Slider*>(revision1416::find(panel,"noiseFill"));auto* view=revision1416::find(panel,"spectrumView");
-    need(image&&print&&fill&&view,"blank canvas controls exist");wait([&]{return print->isEnabled()&&fill->isEnabled();});
+    Player panel(false,false);auto& processor=panel.processor;wait([&]{return processor.recording().snapshot()&&!processor.recording().isBusy();});
+    auto* image=revision1416::box(panel);auto* print=dynamic_cast<juce::Button*>(revision1416::find(panel,"imagePrint"));auto* fill=dynamic_cast<juce::Slider*>(revision1416::find(panel,"noiseFill"));auto* view=revision1416::find(panel,"spectrumView");
+    need(image&&print&&fill&&view,"blank canvas controls exist");wait([&]{return fill->isEnabled();});
     juce::Image picture(juce::Image::RGB,96,128,true);{juce::Graphics g(picture);g.fillAll(juce::Colours::white);g.setColour(juce::Colours::black);g.fillRect(15,16,66,24);g.fillRect(36,30,24,78);}const auto path=folder.getChildFile("letter-T.png");{auto out=path.createOutputStream();juce::PNGImageFormat png;need(out&&png.writeImageToStream(picture,*out),"UI image fixture");}
-    image->loadImageFromFile(path);fill->setValue(.65,juce::sendNotificationSync);wait([&]{return image->conversionReady();});
+    auto* editor=static_cast<SpectrumTagAudioProcessorEditor*>(revision1416::find(panel,"editor"));editor->filesDropped({path.getFullPathName()},200,200);fill->setValue(.65,juce::sendNotificationSync);wait([&]{return image->conversionReady();});
+    need(print->isVisible(),"Print under image in blank workspace");
+    auto* range=dynamic_cast<juce::ComboBox*>(revision1416::find(panel,"frequencyRange"));
+    need(range&&range->isVisible()&&range->getSelectedId()==1,"standalone 20 kHz default");
+    auto* next=revision1416::find(panel,"nextPrint");
+    need(next&&next->isVisible()&&!next->isEnabled(),"empty navigation is visible and disabled");
     print->onClick();wait([&]{auto s=processor.recording().snapshot();return s&&s->edits.size()==1&&!processor.recording().isBusy()&&(int)view->getProperties()["rasterRevision"]==s->revision;});
     const auto audio=processor.recording().snapshot();need(audio->sourceId.startsWith("generated:")&&audio->end()>.1,"UI Print extends source-free timeline");double energy=0;for(int64_t i=audio->first;i<audio->last;++i)energy+=std::pow(audio->sample(0,i),2);need(energy>.01,"UI Print generates real sound");
     panel.keyPressed(juce::KeyPress('z',juce::ModifierKeys::ctrlModifier,0));wait([&]{auto s=processor.recording().snapshot();return s&&s->edits.empty()&&!processor.recording().isBusy();});
@@ -190,7 +232,7 @@ int viewTest(const juce::File& folder){try{
     const auto wav=folder.getChildFile("long-input.wav");
     {auto stream=wav.createOutputStream();juce::WavAudioFormat format;std::unique_ptr<juce::AudioFormatWriter> writer(format.createWriterFor(stream.get(),8000,1,16,{},0));need(writer!=nullptr,"view WAV fixture");stream.release();juce::AudioBuffer<float> audio(1,8000);for(int n=0;n<8000;++n)audio.setSample(0,n,.1f*std::sin(2*juce::MathConstants<float>::pi*440*n/8000));for(int i=0;i<60;++i)writer->writeFromAudioSampleBuffer(audio,0,8000);}
     auto span=[](juce::Component& view){return (double)view.getProperties()["displayEnd"]-(double)view.getProperties()["displayStart"];};
-    {Player panel(false);auto* view=revision1416::find(panel,"spectrumView");
+    {Player panel(false,false);auto* view=revision1416::find(panel,"spectrumView");
         panel.processor.onDropAudioFile(wav);wait([&]{return panel.processor.recording().snapshot()&&!panel.processor.recording().isBusy()&&(bool)view->getProperties()["recordMode"]&&panel.processor.getStateRevision()>0;});
         for(int i=0;i<10;++i)pump();const double expected=(view->getWidth()-70)/60.;
         log("Fresh Load: window="+juce::String(span(*view),6)+" expected="+juce::String(expected,6));
@@ -227,6 +269,26 @@ int viewTest(const juce::File& folder){try{
             need(std::abs(span(*revision1416::find(*reopened,"spectrumView"))-60)<.001,"intentional saved Fit survives restart");}
         log(juce::String("PASS session restore, explicit Fit recall, Mel default; audioBeforeEditor=")+juce::String((int)audioBeforeEditor));
     }
+    {
+        Player restored(false,true);
+        auto* view=revision1416::find(restored,"spectrumView");
+        wait([&]{auto audio=restored.processor.recording().snapshot();return audio&&view->getProperties().contains("rasterRevision")
+            &&(int)view->getProperties()["rasterRevision"]==audio->revision;});
+        (void)view->createComponentSnapshot(view->getLocalBounds());
+    }
+    {
+        auto saved=juce::XmlDocument::parse(Session::sessionFile());
+        need(saved&&saved->getStringAttribute("resumePlot").isNotEmpty(),"shutdown saved the committed plot");
+        const auto start=juce::Time::getMillisecondCounterHiRes();
+        Player reopened(false,true);
+        auto* view=revision1416::find(reopened,"spectrumView");
+        need((bool)view->getProperties()["resumePlotVisible"],"first paint has the saved spectrum and waveform");
+        auto image=view->createComponentSnapshot(view->getLocalBounds());
+        log("Saved plot available in "+juce::String(juce::Time::getMillisecondCounterHiRes()-start,1)+" ms");
+        wait([&]{return !(bool)view->getProperties()["resumePlotVisible"]&&(int)view->getProperties()["rasterApplied"]>0;});
+        need(reopened.processor.recording().cacheHits()>0&&reopened.processor.recording().printPasses()==0,"actual spectrum replaces startup plot without printing again");
+        need(revision1416::find(reopened,"audioDevice")==nullptr,"standalone uses system output");
+    }
     log("ALL STARTUP VIEW CHECKS PASSED");return 0;
 }catch(const std::exception& e){folder.getChildFile("view-failure.txt").replaceWithText(e.what());return 1;}}
 int tailTest(const juce::File& folder){try{
@@ -262,7 +324,7 @@ int tailTest(const juce::File& folder){try{
     for(int n=0;n<96000;++n)need(extended->sample(0,n)==original->sample(0,n),"prefix preserves original audio position");
     need(session.saveLastSession(),"save prefix and tail");
     {SpectrumTagAudioProcessor reopened;reopened.filePlayerMode=true;Session recall(reopened,true);wait([&]{return !recall.busy();});auto s=reopened.recording().snapshot();need(s&&s->first==-26400&&s->last==182400&&s->sample(0,-20000)==extended->sample(0,-20000),"negative Print recalled exactly");need(reopened.recording().cacheHits()==1,"negative Print cache hit");reopened.recording().remove(head.id);need(reopened.recording().flush()&&reopened.recording().snapshot()->first==0,"Delete prefix restores original zero");reopened.recording().remove(e.id);need(reopened.recording().flush()&&reopened.recording().snapshot()->last==96000,"Delete both restores full original range");}
-    {Player panel(false);panel.processor.onDropAudioFile(wav);wait([&]{return panel.processor.recording().snapshot()&&!panel.processor.recording().isBusy();});panel.processor.recording().add(head);need(panel.processor.recording().flush(),"player negative Print");panel.processor.onFileSeek(-.4);juce::AudioBuffer<float> block(2,64);panel.getNextAudioBlock({&block,0,64});need(std::abs(panel.processor.audition().position()+.4)<1.e-8,"standalone playhead accepts negative time");}
+    {Player panel(false,false);panel.processor.onDropAudioFile(wav);wait([&]{return panel.processor.recording().snapshot()&&!panel.processor.recording().isBusy();});panel.processor.recording().add(head);need(panel.processor.recording().flush(),"player negative Print");panel.processor.onFileSeek(-.4);juce::AudioBuffer<float> block(2,64);panel.getNextAudioBlock({&block,0,64});need(std::abs(panel.processor.audition().position()+.4)<1.e-8,"standalone playhead accepts negative time");}
     log("PASS negative-time Print, unchanged song position, cached recall, Delete and negative playhead seek");
     {juce::String error;const auto video=folder.getChildFile("original.mp4"),outputVideo=folder.getChildFile("extended.mp4");
         need(codecRun({"-v","error","-f","lavfi","-i","testsrc2=size=160x90:rate=10:duration=3","-i",wav.getFullPathName(),"-map","0:v:0","-map","1:a:0","-c:v","libx264","-c:a","aac","-y",video.getFullPathName()},error),"extended video fixture");
@@ -358,7 +420,7 @@ int selfTest(const juce::File& folder){try{
         log("PASS video "+ext+": drag, delayed audio alignment, Print, unchanged video packets/frames/timing, audio-only source codec"+(multi?", second audio track preserved":""));editor.reset();
     }
     {juce::String error;auto silent=folder.getChildFile("no-audio.mp4");need(codecRun({"-v","error","-f","lavfi","-i","color=black:size=16x16:duration=1","-an","-y",silent.getFullPathName()},error),"silent video fixture");auto previousAudio=p.recording().snapshot();auto previousFile=session.current().file;session.load(silent);wait([&]{return !session.busy();});need(p.recording().snapshot()==previousAudio&&session.current().file==previousFile,"video without audio preserves current session");log("PASS video without audio rejected without losing loaded session");}
-    {Player panel(false);panel.processor.onDropAudioFile(wav);wait([&]{return panel.processor.recording().snapshot()&&!panel.processor.recording().isBusy();});
+    {Player panel(false,false);panel.processor.onDropAudioFile(wav);wait([&]{return panel.processor.recording().snapshot()&&!panel.processor.recording().isBusy();});
         auto* spectrum=revision1416::find(panel,"spectrumView");
         const auto audio=panel.processor.recording().snapshot();const auto* frame=audio->frameAt(.5);int peak=0;if(frame)for(auto v:frame->level)peak=juce::jmax(peak,(int)v);
         // The first raster can belong to the empty, pre-load view. Wait for
@@ -390,9 +452,19 @@ public:
         if(args.size()>=2&&args[0]=="--missing-test"){setApplicationReturnValue(missingTest(juce::File(args[1].unquoted())));quit();return;}
         window=std::make_unique<Window>();
     }
-    void shutdown()override{window.reset();}void systemRequestedQuit()override{quit();}
+    void shutdown()override{window.reset();}
+    void systemRequestedQuit()override{
+        // 关闭时先把主窗口隐藏，避免销毁过程（含会话保存）中出现的
+        // “界面消失-重现-再彻底消失”的闪烁。所有退出路径都经过这里。
+        // 注意：基类的 systemRequestedQuit() 是纯虚函数，这里直接调用 quit()。
+        if(quitting)return;
+        quitting=true;
+        if(window)window->setVisible(false);
+        quit();
+    }
 private:
-    class Window final : public juce::DocumentWindow {public:Window():juce::DocumentWindow("SpectrumTag "+juce::String(ProjectInfo::versionString),juce::Colour(0xff1a1c1e),allButtons){setUsingNativeTitleBar(true);setContentOwned(new Player(),true);setResizable(true,false);setResizeLimits(930,552,3100,1742);if(auto* c=getConstrainer())c->setFixedAspectRatio(1240./722);centreWithSize(1240,722);setVisible(true);}void closeButtonPressed()override{juce::JUCEApplication::getInstance()->systemRequestedQuit();}};
+    bool quitting=false;
+    class Window final : public juce::DocumentWindow {public:Window():juce::DocumentWindow(juce::String::fromUTF8("SpectrumTag（子青版） ")+juce::String(ProjectInfo::versionString),juce::Colour(0xff1a1c1e),allButtons){setUsingNativeTitleBar(true);setContentOwned(new Player(),true);setResizable(true,false);setResizeLimits(930,510,3100,1700);if(auto* c=getConstrainer())c->setFixedAspectRatio(1240./680);centreWithSize(1240,680);setVisible(true);}void closeButtonPressed()override{juce::JUCEApplication::getInstance()->systemRequestedQuit();}};
     std::unique_ptr<Window> window;
 };
 }

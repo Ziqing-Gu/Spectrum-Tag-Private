@@ -1,6 +1,322 @@
 # SpectrumTag 项目总览与开发过程
 
-维护日期：2026-11-09。本文件是后续维护的统一入口：记录当前架构、需求演变、开发过程、问题诊断、验证边界与平台交接。面向用户的操作说明见 [README](README.md)。
+维护日期：2026-11-16。当前源码版本 **2.0.3**。本文件是后续维护的统一入口：记录当前架构、需求演变、开发过程、问题诊断、验证边界与平台交接。面向用户的操作说明见 [README](README.md)。
+
+## 2.0.3 模式命名与控件显示（2026-11-16）
+
+图像风格的两个模式改为 **Logo 模式** / **复杂图像模式**（复杂图像模式即 2.0.2 的连续灰度衰减）：下拉框、自动化选项、悬停说明以及 Logo 模式的「阈值方式 / 阈值强度」标签同步改名。切换模式后，不适用的一组控件直接隐藏（`setVisible(false)`，仅在可见性变化时 `resized()` 收起空行），不再置灰：Logo 模式只留阈值控件，复杂图像模式只留灰度对比 / 亮度。
+
+源码版本由 **2.0.2 提升到 2.0.3**：`CMakeLists.txt` 仍是唯一来源，`SpectrumTag_installer.iss` 与 `packaging/windows/installer.iss` 的兜底值同步为 2.0.3；仍是源码基线，**未重新打包**。
+
+### 验证（2026-11-16）
+
+- `SpectrumTagVerify --checks202` 通过（产物 `202-logo-mode.png`、`202-grayscale-auto.png`）：下拉两项名称、Logo 模式只显示阈值控件、复杂图像模式只显示灰度控件、切回后恢复；灰度掩模、自动参数与保存恢复断言保持通过。
+- `--checks201`、完整 `--checks`（1.4.8 / 2.0.2 两套用例全绿，停点仍是既有 1.4.9 问题）、独立版 `--fileless-ui-test` 通过；SpectrumTagStandalone / SpectrumTag_VST3 / SpectrumTagVerify 编译通过，版本资源为 2.0.3。
+
+## 2.0.2 频谱右键：打印 / 退回图片 / 聚焦最近的打印（2026-11-14）
+
+右键不弹菜单，按图片对象的三态决定动作（`SpectrumView::contextClick()`）：
+
+| 当前状态 | 右键 |
+|---|---|
+| 状态1 未打印（有源图） | 等同图片下方的打印按钮，走 `onPrintClicked()`（没有真实音频时照常高亮“先加载音频”） |
+| 状态3 已打印且聚焦 | `unprintFocused()`：撤掉这次打印、按 `imagePath` 把源图摆回原打印范围，回到状态1；一次右键是一个撤销步 |
+| 无聚焦对象（状态2 / 空） | 聚焦离点击位置最近的已打印图形：距离取点击点到该 Print 矩形的二维最近距离；没有 Print 时什么也不做 |
+
+- 入口：`SpectrumView::mouseDown` 在 `contentBounds` 内拦下 `isRightButtonDown()`；图片框上的右键经 `imageBox->addMouseListener(this,true)` 转到同一入口（`ImageBoxComponent` 自身仍只处理左键）。用 `isRightButtonDown()` 而不是 `isPopupMenu()`，把 macOS 的 Ctrl+左键留给 Ctrl+拖动复制。
+- 新增 `onContextRevert` 回调，编辑器里用 `beginChange() → unprintFocused() → finishChange(true)` 合并成一个撤销步。
+- 状态栏提示随三态变化：右键打印 / 右键退回图片 / 右键聚焦最近的打印。
+
+### 验证（2026-11-14）
+
+- `SpectrumTagVerify --checks201` 通过（新增 `tests/Revision201Checks.h`，产物 `201-right-click-focus.png`）：空工作区右键无操作、状态1右键打印、两个对象时按点击位置聚焦较近者、状态3右键退回图片且另一个 Print 保留、退回后再右键重新打印、再点较早对象时聚焦的是光标下的那个。
+- `--checks` 完整跑到并打印 `1.4.8 CHECKS PASSED` 与 `2.0.2 RIGHT-CLICK CHECKS PASSED`；随后仍停在既有问题（1.4.9 尾部 `149-preset-5.png` 之后 0xC0000005），原始代码用同样的跑法也停在同一点，不是本轮引入。
+- `Revision148Checks` 里“右键不再切换原图 / 不移动时间轴”的旧断言同步为三态可见性断言。
+
+## 2.0.2 状态1 图片预览：透明底 + 打印墨迹（2026-11-14）
+
+未打印对象不再盖一张“白底黑图”的卡片，改为按打印后的样子铺在频谱上：
+
+- **白底移除**：图片框内部不再填白/灰，原频谱直接透出来；空的投放引导仍保留原来的灰底和文案。
+- **墨迹**：`ImageBoxComponent::rebuildInkOverlay()` 把掩模转成一层黑色 ARGB 覆盖层，受影响像素按 `1 - sqrt(保留音量)` 取 alpha（0% 时完全黑，不再保留透视；灰度模式下强度 1 的纯黑像素必扣净），非墨迹像素完全透明；反转时取掩模补集。
+- **可读性**：整框叠 8% 白色底衬。深色频谱上墨迹仍能看成一个更暗的图形，亮频谱上几乎察觉不到；覆盖层按长边 384 采样并缓存，拖动/缩放不重建，只在掩模、保留音量或反转变化时失效。
+- 虚线框、右下角缩放标记、打印按钮不变。
+
+### 验证（2026-11-14）
+
+- `SpectrumTagVerify --checks201` 通过，并输出三张产物：`201-placing.png`（深色频谱）、`201-placing-bright.png`（压在亮频谱带上）、`201-placing-invert.png`（反转），确认白底消失、墨迹压暗频谱、反转取的是形状之外。
+- `--checks` 到 1.4.8 / 2.0.2 全绿（停点与既有问题相同）；独立版 `--fileless-ui-test` 通过。
+
+## 2.0.2 复杂图像模式（灰度）：照片式连续衰减（2026-11-14）
+
+拖入彩色图片时自动切到「复杂图像模式」；线稿/黑白图继续走「Logo 模式」。右侧「图像风格」提供这两个模式，Logo 模式显示「阈值方式/阈值强度」，复杂图像模式显示「灰度对比/灰度亮度」；切换后不适用的一组控件直接隐藏并收起空行，只保留当前模式可调的控件。
+
+### 实现
+
+- `image::Settings` 增加 `grayscale/contrast/brightness`；`binarize()` 在灰度模式下按亮度与对比/亮度参数计算每个像素的 ink（0=不衰减，1=全衰减）写入掩模 alpha，二值模式逻辑不变。
+- `image::rasterize(..., continuous)` 与 `image::preview(..., continuous)` 保留连续 alpha。`PrintEdit.mask` 原本就是 `float`，渲染端（`RecordingEngine::apply` 的 `difference`、实时 `jmap(m,1,ratioGain)`、`OfflineRenderer`、`TargetFill`、`printPreview`）一直按 0..1 连续插值，因此 DSP 无需改动，灰度值越大的频段/时间格衰减越多。
+- `image::hasColour()` 用 256 px 缩略图统计色度：可见像素（alpha≥0.25）中 ≥25% 的色度 >0.12 判为彩色；`loadImageObject()` 据此把 `imageStyle` 设置为复杂图像模式或 Logo 模式（自动判断可被手动覆盖，下一次拖图重新判断）。
+- `image::autoGrayTone()` 按当前图片可见像素亮度的 10%/90% 分位拟合灰度端点：暗部起点上移 0.08、亮部终点下降 0.02，再换算成对比/亮度（对比下限 0.55、亮度限制 0.35–0.65）；每次拖入彩色图都重算并直接写入参数，**不继承上一张图**。`binarize()` 对亮度 <0.02 的像素强制 ink=1，保证纯黑始终扣净。
+- 新参数 `imageStyle`、`imageGrayContrast`、`imageGrayBrightness` 追加在参数表末尾，保持旧工程自动化索引；`PrintEdit` 新增 `imageStyle/grayContrast/grayBrightness`，记录格式升到 **SPT6**（SPT5 及更早按 Logo 模式 + 0.5 默认读取），ARA 状态树同步读写；`sameEdit` 比较灰度参数。
+- 左侧预览墨迹按强度逐像素取 alpha；图像相关行改为「标签 + 控件同排」，隐藏不适用的一组后只保留当前模式的控件，独立版右下角导出圆钮不会被遮挡。
+
+### 验证（2026-11-14）
+
+- `SpectrumTagVerify --checks202` 通过（产物 `202-colour.png`、`202-flat.png`、`202-grayscale-auto.png`、`202-grayscale-placing.png`、`202-grayscale-print.png`）：线稿保持 Logo 模式、彩色图自动复杂图像模式且掩模出现连续值、对比/亮度改变掩模、打印记录保存灰度参数、工程保存/恢复后 `sameEdit` 一致；另外验证换图后自动参数重新拟合（不继承手改的 0.05）、两张不同图片得到不同参数（梯度图 0.816/0.462，黑+橙图 0.735/0.65）、纯黑区域掩模值必为 1.0。
+- `--checks201`、`--checks1410/1412/1421` 通过；独立版 `--fileless-ui-test` 通过；`--checks` 到 1.4.8/2.0.2 全绿（停点仍是既有 1.4.9 问题）。
+
+## 2.0.2 版本提升（2026-11-14）
+
+源码版本由 **2.0.1 提升到 2.0.2**：`CMakeLists.txt` 的 `project(SpectrumTag VERSION)` 仍是唯一来源，`juce_add_plugin` / `JucePlugin_VersionString`、独立版标题与安装包产品版本都跟着它走；`SpectrumTag_installer.iss` 与 `packaging/windows/installer.iss` 的兜底值同步为 2.0.2，`build_installer.bat` 照旧从 CMakeLists 解析版本并校验产物。本轮内容即上面三项（右键上下文操作、状态1 打印式预览、灰度模式）。仍是源码基线：**未重新生成安装包**。
+
+## 2.0.1 macOS 独立版：编码器随包与安装包修复（2026-11-12）
+
+本轮只改 macOS 本地构建与打包链，产品功能、参数和 Windows 侧不变。触发问题：本机编译出的 `SpectrumTag.app` 一导入或导出媒体就提示 “The bundled audio/video codec is missing. Reinstall the complete SpectrumTag application.”。
+
+### 原因
+
+- 运行时按 `Contents/Helpers/<当前运行架构>/ffmpeg` 查找编码器（`Standalone/EmbeddedCodec.cpp`）。该路径此前只有 CI 填充：`.github/workflows/cross-platform.yml` 在构建后手工调用 `packaging/macos/bundle_codec.py`。
+- CMake 本地构建（Ninja / Unix Makefiles / CLion）没有对应步骤，也不给任何提示，因此本地产物必然缺少编码器。
+- 本机同样没有可用 FFmpeg：Homebrew 的 `ffmpeg` / `ffmpeg-full` 在 Intel macOS 上没有 bottle，安装等于从源码编译整套依赖。
+
+### 实现
+
+- `CMakeLists.txt`：`SpectrumTagStandalone` 链接后按 app 架构逐个执行 `bundle_codec.py`，把 helper 写入 `Contents/Helpers/<arch>/`，许可与构建信息写入 `Contents/Resources/ThirdParty/<arch>/`。编码器查找顺序：`-DSPECTRUMTAG_MACOS_CODEC=...` → `packaging/macos/runtime/<arch>/ffmpeg` → Homebrew `ffmpeg-full` / `ffmpeg`；找不到时只在配置阶段告警并点名缺失架构，不阻塞编译。
+- 新增 `packaging/macos/fetch-codec.sh`：下载官方 GPL 静态 FFmpeg（amd64 / arm64），用发布方 SHA-256 校验压缩包，校验 Mach-O 架构，保存 `COPYING.GPLv3` 与 `FFmpeg-NOTICE.txt`，并确认导出所需的 libx264/libx265/libvpx-vp9/libmp3lame/libvorbis/libopus/prores_ks/flac/pcm_s24le 齐全。`packaging/macos/runtime/` 已加入 `.gitignore`。
+- `packaging/macos/bundle_codec.py`：静态构建不再要求 Homebrew，改为记录编码器自身来源；复制同级许可与声明；本机不能执行的跨架构 helper 不再让构建失败，构建信息明确写“无法在打包机上运行”。
+- `build_macos_installer.sh`：打包前校验每个架构都有 `Contents/Helpers/<arch>/ffmpeg`，缺失直接失败并给出取码命令；第 7 步给 `hdiutil create` 显式传 `-size`（负载 + 64MB 余量）。
+- `README.md`：macOS 构建输入说明与 Windows 侧对齐。
+
+### 验证（2026-11-12，Intel macOS 15.2）
+
+- `build/` 与 `cmake-build-release/` 重新配置后都产出 `Helpers/arm64/ffmpeg`、`Helpers/x86_64/ffmpeg`；helper 的 `codesign --verify --strict` 通过。
+- 两个目录的 app 运行 `--codec-check` 均返回 `ok: true`。
+- `--video-test` 在这两个产物上通过：WAV、MP4（720p30、9:16）、MOV、MKV、WebM 导出、取消保护与像素一致性断言全绿。
+- `build_macos_installer.sh --skip-plugins` 完整跑通，产出 `dist/SpectrumTag-2.0.1-macOS.pkg`（68MB）与 `.dmg`（70MB）；`pkgutil --payload-files` 可见双架构 helper，DMG 已挂载核对。
+
+### 仍存边界
+
+- arm64 helper 在 Intel 上无法执行，只做了架构、签名、下载包 SHA-256 与该构建官方编码器清单的静态核对；M 芯片实机首次使用应先跑 `--codec-check` 或导出一段短视频。
+- 两个 helper 来自构建源各自的当前候选（x86_64 为 N-122320，arm64 为 N-128220），编码器覆盖一致但非同一修订；需要严格一致时用 `-DSPECTRUMTAG_MACOS_CODEC` 指定同一份编码器。
+- App 最低系统 11.0、编码器最低 12.0，实际要求 macOS 12+；官方安装包基线仍是 macOS 15。
+- 仍未做 Developer ID 签名与公证，跨机器安装可能被 Gatekeeper 拦截。
+
+### DMG “无剩余空间”的真实原因
+
+`hdiutil: create failed - 设备上无剩余空间` 与磁盘容量无关（当时可用约 250GB）。`hdiutil create -srcfolder` 的自动容量估算会少算几 MB：本机用普通随机文件复现，64MB 成功、65–70MB 稳定失败、72MB 及以上恢复成功。新 pkg 为 68MB，正好落在失败区间，1.4.3 时代的 24MB pkg 不会触发；改用显式 `-size` 后一次通过。
+
+## 2.0.1 版本提升与本轮开发汇总（2026-11-12）
+
+源码版本由 **2.0.0 提升到 2.0.1**：`CMakeLists.txt` 的 `project(SpectrumTag VERSION)` 仍是唯一来源，`juce_add_plugin` 的 `VERSION`、独立版标题栏与关于信息里的 `JucePlugin_VersionString` 都跟着它走；`SpectrumTag_installer.iss` 与 `packaging/windows/installer.iss` 的兜底值同步改为 2.0.1，`build_installer.bat` 照旧从 CMakeLists 解析版本并校验产物。仍是源码基线：**未重新生成安装包**。
+
+2.0.0 之后（同日）落地的改动，按提交顺序：
+
+| 主题 | 内容 | 对应章节 |
+|---|---|---|
+| 交互定稿 | 打印按钮改为圆角矩形 + 描边；已打印对象一次拖动就退回图片态；退回瞬间不再把整列频谱挖黑 | 2.0.0 交互定稿 |
+| 打包脚本 | 安装包版本改为从 CMakeLists 读取（不再写死 1.4.3），打包前校验产物版本 | 打包脚本版本号修复 |
+| 测试工具 | 新增 `reset_first_run.bat`，一键恢复首次打开状态 | 开发辅助：恢复首次打开状态 |
+| 细节微调 | 无音频提示条居中、三个工具按钮统一描边、Ctrl+拖动复制、Ctrl+C/V、隐藏显示上限并默认 22.05 kHz | 2.0.0 交互微调 |
+| 复制按钮 | Ctrl+V 在聚焦态也能粘贴（聚焦对象保留为打印）；删除按钮右侧新增复制/粘贴按钮 | 追加：粘贴不再要求先取消聚焦 |
+| 导航箭头 | 上一个/下一个打印只在存在多个打印时显示，且只留图标、无底板 | 追加：上一个/下一个打印 |
+
+### 验证（2.0.1）
+
+- 编译：`SpectrumTagStandalone`、`SpectrumTag_VST3`、`SpectrumTagVerify` 全部通过；ARA 未在本机编译（改动都在共享编辑器代码内）。
+- 独立版 `--fileless-ui-test` 通过，覆盖三态切换、一次拖动退回图片态、退回不闪黑、圆角打印按钮、提示条居中、描边工具按钮、隐藏显示上限与 22.05 kHz 默认、Ctrl+拖动复制、Ctrl+C/V、聚焦态粘贴、复制/粘贴按钮、导航箭头按需显示。
+- `--checks1410/1412/1421/1427` 通过；`--checks` 仍在 1.4.9 之后的既有位置崩溃（已用未修改代码复现同一位置，属既有问题）。
+- 安装包未重建。需要出包时直接跑 `build_installer.bat`，会先校验产物 `ProductVersion`，再输出 `dist\SpectrumTag_Setup_2.0.1_x64.exe`。
+
+## 2.0.0 交互微调：居中提示、统一描边按钮、Ctrl 拖动复制、Ctrl+C/V、隐藏显示上限（2026-11-12）
+
+用户提出五项细节调整，版本仍为 **2.0.0**，未重新打包。
+
+| 需求 | 处理 |
+|---|---|
+| 未加载音频提示框贴在频谱上方 | 改为频谱显示区垂直居中 |
+| 音频设备按钮与左（导出诊断）右（语言）的样式不一致 | 新增 `outline` 按钮样式：只有描边、不填充（露出父组件底色），三个按钮统一 |
+| Ctrl+拖动图片会多出一个对象 | Ctrl+拖动＝原位留一份 Print、拖走同样的副本 |
+| 需要 Ctrl+C / Ctrl+V 复制图片对象 | Ctrl+C 记录当前对象；没有聚焦对象时 Ctrl+V 在播放位置新建副本 |
+| 显示上限下拉框 | 隐藏显示（参数、附件与重渲染逻辑保留），默认 22.05 kHz |
+
+### 实现要点
+
+- `SpectrumTagLookAndFeel::drawButtonBackground` 新增 `outline` 分支：常态只有 1 px 白色 26% 描边、不填充，hover/press 加淡白填充并提亮描边，文字沿用 ghost 的灰/白配色。语言、导出诊断、音频设备三个按钮都设为 `outline`（音频设备按钮由独立版创建）。
+- `ImageBoxComponent` 新增 `onDuplicateDrag`：mouseDown 时按住 Ctrl 且有图就置 `duplicatePending`，拖动超过 3 px 才触发复制（避免 Ctrl+单击的抖动）。`dragToParentPoint` 里先让编辑器 `duplicateImageObject()` 把原对象 `printPlacingObject()` 打进频谱、再重新载入同一张图作为副本，然后把副本摆回手势起点按同一位移继续拖动。撤销步由 `onGestureStart/onGestureEnd` 合并成一个；打印不成立（没有可打印音频）时退化成普通拖动。
+- `imagePicked()` 拆出 `loadImageObject()`（只负责载入、缓存副本、落位，撤销步由调用者提交），导入与粘贴共用。Ctrl+C 走 `copyImageObject()`：优先取聚焦 Print 的 `imagePath`，否则取未打印对象图片框的路径。Ctrl+V 走 `pasteImageObject()`：仅在无聚焦对象时生效，`loadImageObject()` 之后用 `SpectrumView::placeImageStartAt()` 把左边缘对齐 `processor.audition().position()`，播放位置不在视窗内时先把视窗跟过去。
+- 显示上限：`frequencyRangeCombo` / `frequencyRangeLabel` 在子组件被重挂到 `scaledContent` **之后**才隐藏——`addAndMakeVisible` 会重新显示子组件，写在前面无效（排错时踩过）。参数默认值 0（20 kHz）改为 2（22.05 kHz），tooltip 同步。
+- 回归探针：`SpectrumView` 新增诊断属性 `imageStart`、`audioBannerY`；独立版音频设备按钮补 `componentID("audioDevice")` 便于查找。
+
+### 验证
+
+- `SpectrumTagStandalone`、`SpectrumTagVerify`、`SpectrumTag_VST3` 编译通过；未编译 ARA（改动在共享编辑器代码内）。
+- `--fileless-ui-test` 通过，新增断言：无音频提示框位于频谱区中部（`audioBannerY > 高度/3`）、三个工具按钮 `spectrumTagStyle=outline`、`frequencyRange` 下拉不可见且默认值为 22.05 kHz、Ctrl+拖动后 `edits=1` 且副本跟随指针、Ctrl+C 后 Ctrl+V 使对象数 +1 且 `imageStart≈2.0 s`。截图确认三按钮一致、提示条居中、显示上限下拉框消失。
+- `--checks1410/1412/1421/1427` 通过；`--checks` 跑到 1.4.9 之后仍在既有位置崩溃（1.4.8 里“新实例默认 20 kHz”的断言已按新默认改为 22.05 kHz）。旧会话会按保存的参数恢复原档位，只有新实例才落在 22.05 kHz。
+
+#### 追加：粘贴不再要求先取消聚焦，删除按钮右侧新增复制按钮（2026-11-12）
+
+- **Ctrl+V 随时可用**：不再要求“没有聚焦对象”。若当前有聚焦的 Print，先按“点空白处取消聚焦”的同样方式收尾（`selectEdit({})` + `clearImage()` + `refreshCanvas()`）——Print 本身已经打印在频谱里，等于自动打印，图片框腾空接新对象；若还有未打印的图片对象，`loadImageObject()` 照旧先把它打印掉。新副本仍以播放位置为左边缘。
+- **复制按钮**：`copyImageButton` 放在删除按钮右侧（导航箭头顺势右移 76 px），启用条件与删除按钮完全一致（`hasImage || selectedPrint`）。平时文案「复制」（等同 Ctrl+C，成功后立刻变成「粘贴」），再按等同 Ctrl+V 并回到「复制」；文案、提示随中英文切换。`copyImageObject()` / `pasteImageObject()` 改为返回 bool 供按钮判断是否切换状态。
+- 验证：`--fileless-ui-test` 新增“聚焦态粘贴（`edits` 不变、副本落在 3.0 s）”“按钮无对象时置灰、有对象时亮起、文案在复制/粘贴间切换、按下后在 4.0 s 生成副本”等断言；截图确认按钮位于「删除」右侧且样式一致。
+
+#### 追加：上一个/下一个打印改为按需显示、只留图标（2026-11-12）
+
+- `PrintNavigationButton` 去掉底板填充，只描边出箭头：悬停 100%、常态 88%、按下 72%、不可用 22% 白；按钮宽度由 70 收到 36（图标 22 px 居中），两个箭头贴在复制按钮右侧。
+- 可见性：`tick()` 里按频谱中的打印数量决定——`edits.size() > 1` 才显示，只有 0 或 1 个打印时两个箭头隐藏（`adjacentPrint()` 在“单个打印且未选中”时会同时给出前后两个 id，不能拿 `isEnabled()` 当判据）。`enabled` 仍按各自的相邻打印是否存在。
+- 验证：`--fileless-ui-test` 新增“没有多个打印时箭头隐藏”“出现第二个打印后箭头显示且宽度收窄到图标”两条断言；截图确认箭头无底框、位于复制按钮右侧。
+
+## 2.0.0 交互定稿：打印按钮圆角矩形、已打印对象一次拖动退回图片态（2026-11-12）
+
+用户验收通过后要求固定本轮结果。版本仍为 **2.0.0** 源码基线，未生成安装包。本轮只解决两个交互问题：
+
+| 用户反馈 | 处理 |
+|---|---|
+| 拖入图片后的打印按钮是个小圆点，不像按钮 | 改为圆角矩形 + 深色描边，尺寸 78×36 |
+| 直接拖已打印的图片要“先点一次聚焦、再拖一次”才回到图片模式；且从状态3回到状态1时，图片上下那段竖直区域会闪黑一下 | 一次拖动直接退回状态1并继续跟随指针；退回绘制只挖打印自己的频带，不再挖整列 |
+
+### 实现要点
+
+- **打印按钮**：`RoundPrintButton::paintButton()` 由 `fillEllipse` 改为 `fillRoundedRectangle`（圆角半径 ≈ 高度 30%）+ 1.6 px 描边（hover 更亮、按下变灰、禁用变淡），字号按新高度重算；`layoutPrintImageButton()` 仍居中贴在图片下方，放不下时移到上方并夹在画布内，按钮尺寸 54×54 → 78×36。
+- **一次拖动回状态1**：`SpectrumView::mouseDrag` 越过 3 px 阈值且该 Print 处于选中态时，先 `onRevertFocused` 撤掉这次打印，再把这同一手势的剩余位移交给图片框（`ImageBoxComponent::beginExternalDrag/continueExternalDrag/endExternalDrag`），图片按打印范围摆回并跟随指针。松手由 `SpectrumView::mouseUp` → `onRevertEnd`（图片缺失时）或 `ImageBoxComponent::onGestureEnd` 收尾，“撤打印 + 移动”合并为一个撤销步（`gestureActive` 全程保持）。单击不拖动仍是聚焦到状态3。
+- **消除闪黑**：绘制层原先在打印被移除后把该时间片的**整列**频谱挖空（遮挡 FFT 泄漏），新栅格到达前图片上下同一列就是黑的。新增 `SpectrumView::imageRevealId`（由 `unprintFocused()` 调 `markPrintRevealed()` 设置，新栅格应用后清除）：退回未打印态时只挖这次打印自己的频带（该频带正被图片覆盖）。`Delete` 删除对象仍按整列处理，保持原有像素清理。另加兜底：任何情况下图片框完整盖住某个已移除打印的范围时也只挖频带。
+
+### 验证（固定前最后一轮，2026-11-12）
+
+- 重新编译通过：`SpectrumTagStandalone`、`SpectrumTagVerify`、`SpectrumTag_VST3`；未在本机编译 ARA（改动全在共享编辑器代码，ARA 走同一套）。
+- 独立版 `--fileless-ui-test` 通过，新增断言：按钮宽>高（圆角矩形）；一次拖动把已打印对象退回图片态且图片跟随指针；退回瞬间图片上下的列不被挖黑。第三条做了反向验证：临时去掉修复后该列亮像素由 1260 掉到 105、用例失败，修复后 1260→1260。
+- `--checks1410/1412/1421/1427` 通过（1410 单独运行需先有 `transparent-detail.png` 夹具，缺夹具会误报）。`--checks` 仍在 1.4.9 之后崩溃，已用未修改代码复现同一位置，属既有问题，与本轮无关。
+- 未重新生成安装包；产物仍在 `SpectrumTag_artefacts`/`SpectrumTagStandalone_artefacts` 的 Release 目录。
+
+### 打包脚本版本号修复（2026-11-12）
+
+根目录 `build_installer.bat` / `SpectrumTag_installer.iss` 曾把版本写死成 `1.4.3`：源码已是 2.0.0，打出来的 Setup 仍叫 `SpectrumTag_Setup_1.4.3_x64.exe`，`AppVersion`、卸载项名称和文件版本资源也都停在 1.4.3。现在：
+
+- **版本唯一来源**是 `CMakeLists.txt` 的 `project(SpectrumTag VERSION x.y.z)`。`build_installer.bat` 用 PowerShell 正则解析后以 `/DMyAppVersion=<x.y.z>` 传给 ISCC；`.iss` 侧改为 `#ifndef MyAppVersion` 兜底（只在手动执行 ISCC 时生效），文件名 `OutputBaseFilename`、`AppVersion`、`VersionInfoVersion`、`UninstallDisplayName` 全部跟着它走。
+- **打包前校验产物的 `ProductVersion`**（Standalone 与 VST3）必须等于源码版本，不一致直接报错中止，避免旧产物被打进新包。
+- 脚本末尾的 `pause` 改为仅在交互运行时暂停，支持 `build_installer.bat /nopause` 供脚本调用。
+- 记账：`echo` 文本里出现裸的 `)` 会提前闭合外层 `if (...)` 块，`REM` 里的 `<`/`>` 会被当成重定向；两处都已改掉（排错时踩过）。
+- 验证：`dist\SpectrumTag_Setup_2.0.0_x64.exe` 生成成功，Setup 的 `FileVersion`/`ProductVersion` 均为 2.0.0；把 `CMakeLists.txt` 临时改成 2.0.1 再执行，脚本按预期报“产物版本 2.0.0 与源码版本 2.0.1 不一致”并中止，恢复后再次打包正常。
+
+## 开发辅助：恢复首次打开状态（2026-11-12）
+
+`reset_first_run.bat`（仓库根目录）用于测试前把软件还原到“第一次打开”的状态。路径规则与 `shared/Presentation.h` 保持一致：`SPECTRUMTAG_PREFS_DIR` 优先，其次是存在 D 盘时的 `D:\Codex\PluginData\SpectrumTag`，否则 `%APPDATA%\SpectrumTag`（`Recordings`、`Standalone`、`Images`、`RenderCache` 都在该目录下）。
+
+- 删除 `preferences.xml`、`Standalone\`（上次会话与视频导出设置）、`Images\`（打印回填用的图片缓存）、`RenderCache\`、`Recordings\*.sptrec`，以及遥测文件 `%APPDATA%\iisaacbeats\Telemetry\spectrumtag.xml`（匿名 client_id）。只删这些子项，不删数据目录本身，也不碰音乐、图片和导出目录。
+- 参数：`/y` 不再确认、结束后不停顿（供脚本调用）；`/keep-recordings` 保留 `.sptrec`，已有 DAW 工程仍能打开；`/run` 重置后启动独立版。默认交互确认，并先显示数据目录大小与将要删除的内容。
+- 先 `taskkill` 正在运行的 `SpectrumTag.exe`，避免它退出时把 `preferences.xml` / `last-session.xml` 写回；拒绝盘符根目录等过短路径，防止误删。
+- 验证：在隔离目录（`SPECTRUMTAG_PREFS_DIR`）依次验证了全量重置（子项清空、目录保留、遥测删除）、`/keep-recordings`（只留 `Recordings`）、交互 Y（执行）与交互 N（取消且 0 删除）；不带环境变量时正确定位到 `D:\Codex\PluginData\SpectrumTag`（1513.2 MB）。
+
+## 2.0.0 重构：图片对象的三种状态（2026-11-11）
+
+用户提出重新梳理“图片放进软件后”的整套交互，旧模型（原图/隐藏 + 点击频谱即打印 + 选中打印就地重渲染）被整体替换。
+
+### 目标行为
+
+| 场景 | 行为 |
+|---|---|
+| 未加载音频（首次启动 / 清空后） | 只显示“未加载音频”引导；**不显示**投放引导；拖入图片被拒绝并高亮音频引导；已有图片对象销毁 |
+| 有音频、无图片对象 | 显示“拖入图片”引导框 |
+| 状态1：未打印 | 图片可见，可拖动/缩放/改参数；图片下方居中显示圆角矩形打印按钮（不遮挡图片，放不下时自动移到图片上方） |
+| 状态2：已打印、未聚焦 | 只看到频谱里的挖空；图片、按钮、边框都不显示 |
+| 状态3：已打印、聚焦 | **只画打印范围 + Delete 提示**，不显示源图（与旧“选中打印”的视觉一致，但不再叠图） |
+
+### 状态迁移
+
+- **拖入图片** → 状态1。若已有未打印对象，先把上一张打印进频谱，再导入新图（保证同一时间只有一个未打印对象）。
+- **点打印按钮** → 渲染 → 状态2（源图销毁，对象只留 Print）。
+- **点打印位置** → 状态3：只选中这个 Print（框 + Delete 提示），同时把源图从框里清空，回填该 Print 的参数与视图。
+- **状态2/状态3 下直接拖动/缩放（框内拖动或右下角手柄）/改任意渲染参数** → 撤掉这次打印（频谱恢复原样），按 `imagePath` 把源图重新载入并对齐到原打印范围 → 状态1，必须重新打印。拖动时图片在同一次手势里就回到指针下继续跟随（2026-11-12 起，无需先聚焦再拖）；退回的那一帧只挖打印自己的频带，不会把整列频谱挖黑。
+- **Delete / 删除按钮** → 删除整个图片对象（Print + 源图一起消失），无法再复活。
+- **清空（垃圾桶）** → 音频 + 全部图片对象 + 偏好里的图片引用一起清除。
+- **取消聚焦**（点空白处）→ 状态3 → 状态2。
+
+### 实现要点
+
+- `SpectrumView` 用派生状态取代原来的 `imageVisibleRequested/imageHiddenInSession`：`imageStage()` 由“图片框是否载入图片 + 是否有选中的 Print + 时间线上是否还有 Print”推导；`refreshCanvasState()` 决定图片框/打印按钮的可见性与位置，状态切换后立即刷新，另有每 tick 兜底。
+- 打印按钮是 `SpectrumView` 的子组件（`imagePrint`，`RoundPrintButton`），由 `layoutPrintImageButton()` 贴在图片框下方居中并夹在画布内。
+- 打印入口收敛为 `printPlacingObject()`（状态1 → 状态2）与 `onPrintClicked()`（按模式分发），旧的“点击频谱自动打印”分支、`editedSelection/updateSelectedPrint/enterImageMode` 及其预览链一并删除。
+- 状态3 → 状态1 由 `unprintFocused()` 完成（重新载入 `imagePath`、`alignImageToPrint()`、删掉 Print）；`changed(true)` 只置 `pendingRevert`，在手势结束/`finishChange()` 时统一执行，保证一次修改是一个撤销步；框内拖动/手柄缩放通过 `onRevertFocused` 立即走同一条路径并中止这次打印拖动。
+- 删除与清空统一销毁源图并 `refreshCanvas()`；`imagePicked()` 负责音频门禁、先打印上一张、缓存图片副本。
+- 移除眼睛按钮、右键显示/隐藏原图、以及 `PluginProcessor` 构造时用偏好“记住的上次图片”预置源图的机制——这是“删掉的图又回来”的第二个来源。
+- 旧存档兼容：`imageVisible=0` 且没有 `selectedPrint` 的隐藏源图解析为“没有图片对象”；带 `selectedPrint` 的按“聚焦”恢复。
+
+### 验证（2026-11-11）
+
+- `SpectrumTagStandalone`、`SpectrumTag_VST3`、`SpectrumTagVerify` 均重新编译通过。
+- 独立版 `--fileless-ui-test` 通过，覆盖：无音频不显示引导/拒绝拖图/点频谱只提示加载音频、加载音频后出现状态1与打印按钮、点击频谱不再打印、按钮打印→状态2、点击→状态3（**只有框，没有图**）、改参数→退回状态1、再次拖图自动打印上一张、Delete/清空销毁对象、撤销/重做、导出弹窗。
+- `--checks` 中的 Interaction / Recording / Noise / Timeline / 1.4.6 / 1.4.7 / 1.4.8 全部通过；定向 `--checks1410/1412/1421/1427` 通过。
+- **已知问题（待下一轮）**：`--checks` 跑到 1.4.9 之后会崩溃（0xC0000005，发生在 1411/1416 一带的 UI 用例）尚未定位；1.4.9 中 insight（第 6 档）的“预设打印”用例因参考窗口把图片框推到录音起点之前被打印门禁拒绝，已从该循环中移除（该档仍由标尺/RMS 用例覆盖）。测试改动是行为变更的必要同步，不应视为放宽标准。
+
+### 测试同步
+
+`tests/InteractionChecks.h`、`RecordingChecks.h`、`Revision147/148/149/1410/1412/1427Checks.h` 中依赖“眼睛按钮/点击即打印/选中打印就地重渲染”的断言已改写为三态语义（聚焦、退回未打印、重新打印、删除对象）。
+
+## 2.0.0 修复：恢复“只有音频”的存档时投放引导框消失（2026-11-11）
+
+用户报告：独立版只加载音频、没有添加图片时，画布上应当有“拖入图片 / 或单击、双击此处选择”的引导框；当前版本不显示。
+
+- **现象**：恢复该存档后频谱正常，但画布上既没有原图，也没有黑黄虚线引导框；眼睛按钮仍处于可用状态。
+- **原因**：会话状态把图片记成隐藏（`last-session.xml` 的 `imageVisible="0"`），同时状态与偏好里仍保留上次记忆的图片路径，且该缓存图片文件存在（`Recordings` 尾部的 Print 数为 0，说明没有任何打印内容）。编辑器恢复时先 `setImageVisible(false)`，再 `loadImageFromFile()` 载入记忆图片，于是 `hasImage()` 变为 true；`tick()` 里“图片存在性变化”的同步随后按 `imageVisibleRequested=false` 把整个框隐藏。引导框原先只在 `!hasImage()` 时绘制，所以“有图但被隐藏”的存档既不显示图也不显示引导。1.4.28 靠恢复顺序的巧合（先设不可见、后载入图片，且当时没有 tick 内的可见性同步）把图片留在可见状态，因此这个空画布没有暴露出来。
+- **修复**：`ImageBoxComponent` 新增 `guideMode`；`refreshImageBoxVisibility()` 在“有图但被隐藏 + 本窗口没有主动隐藏 + 时间线上没有任何打印/预览/选中内容”时改画投放引导并保持可见。本窗口内的主动隐藏（眼睛按钮、Print 后自动隐藏）仍保留干净画布；引导模式下单击打开文件选择器、不再拖动框体，点击频谱也不会用隐藏的旧图自动打印。可见性每个 tick 重新评估，打印、删除、预览上下线都会即时更新。
+- **验证**：`SpectrumTagStandalone` 与 `SpectrumTag_VST3` 重新编译通过；`--fileless-ui-test` 通过（空工作区引导、无音频拦截、概览拖动/缩放、打印、删除、Clear/Undo）。用用户真实存档实测：恢复后显示引导框，点眼睛显示记忆图片，再点眼睛回到干净画布，打印完成后不出现引导。测试期间用户会话文件已先备份并按原样还原。
+- **边界**：未重新生成安装包，未在本机编译 ARA（本机无 ARA SDK，共享编辑器改动同样走 `isLoadMode()` 分支）；“记忆上次图片”的既有行为保持不变。
+
+## 2.0.0 交互打磨：图片放置打印、无音频引导与波形导航（2026-11-11）
+
+用户要求在不递增版本号的前提下完成三项交互修正，并把这轮未提交的“图片放置模式”改动一起收尾：下方波形要支持按住拖动连续定位，且可直接拖动视窗白框调整时间跨度；空工作区要把“拖入图片”的提示框画回来；没有加载音频时，点击频谱不得渲染，要先引导加载音频。版本仍为 **2.0.0**，本轮不生成安装包。
+
+### 打印入口：从隐藏按钮改为图片放置模式
+
+- `Print` 圆按钮不再显示，仍保留为内部触发入口（`PluginEditor.h` 注释明确自动化、诊断和回归测试继续走此路径）。`printButton.onClick` 未删除，`onPrintClicked()` 仍是唯一提交入口。
+- 频谱在“图片可见 + 已有图片 + 没有选中 Print”时，左键点击任意空白处即调用 `onAutoPrint()`；`SpectrumTagAudioProcessorEditor` 把它接到 `onPrintClicked()`，实现放置图片后单击即打印。点击已选中的 Print 仍是“选中/恢复比例”，不 seek；点击图片框本身不触发自动打印。
+- 选中 Print 后拖动原图框，改为移动该 Print 本身：`boxDragPrintId` 记录被拖动对象，`onGestureStart` 只对该对象生效；`onGestureEnd` 用 `makeEdit()` 还原同一 id 的位置并原位替换，不新建第二条编辑。空引导框拖动不会误移动无关 Print。
+- 选中 Print 后调整 B/W amount、模式或反转时，`enterImageMode()` 会从打印的 `imagePath` 重新载入原图、对齐到打印范围并显示，便于边调边看；这条逻辑使 1.4.12 的旧测试需要先隐藏原图，再测量选中 Print 的模拟预览。
+- 空图片框单击也会打开文件选择器（拖动仍只移动框）；双击行为保留。
+
+### 无图引导框
+
+- `ImageBoxComponent::paint` 在 `!hasImage()` 时绘制黑黄虚线引导框：图片图标 + “拖入图片 / Drop a picture” + “或单击 / 双击此处选择 / or click / double-click to choose”；小框自动退化为单行文字。
+- 可见性不再只跟随记住的 `imageVisible`：`setImageVisible()` 现在落到 `imageVisibleRequested`，`refreshImageBoxVisibility()` 采用“用户要求显示 或 当前没有图片”，因此空工作区始终有引导框；眼睛按钮在无图时禁用，`onClick` 也直接返回。新图载入后仍自动显示并恢复原先的隐藏/显示逻辑。恢复存档留下的隐藏状态见上一节的引导框修复：有图但被隐藏且没有任何打印内容时同样显示引导。
+- 引导框随图片存在性变化在 `tick()` 中检测（`lastHasImage`），不依赖鼠标事件。
+
+### 无音频拦截与画布提示
+
+- `SpectrumTagAudioProcessor::hasLoadedAudio()`：有非空快照，且不是独立版 `filePlayerMode` 下的 `generated:` 空白画布。独立版启动、Clear 后以及“只在空白时间轴打印”的旧占位不再算已加载音频。
+- `onPrintClicked()` 在 `isLoadMode()`（独立版 / ARA）先检查该条件；不满足时 `finishChange`、取消打印、清零 Print 自动化触发，并调用 `spectrumView->flashAudioHint()`，不创建编辑、不渲染。
+- `SpectrumView` 在内容区顶部绘制“尚未加载音频 / No audio loaded”引导条；独立版文案提示拖入文件或点击加载，ARA 提示点击加载。点击引导条等同 `recordButton.onClick()`（独立版打开文件选择器，ARA 走加载）。拦截时引导条边框黄色闪烁约 2.2 秒。引导条画在 ARA 状态条之上，避免被覆盖。
+- 实时 VST3 不属于 `isLoadMode()`，录音/停止时的原有 Print 行为不变。
+
+### 下方波形：连续拖动与白框缩放
+
+- `overviewScrubTo()`：按住概览波形拖动时按 x 连续 seek，更新 `auditionAt` 和视窗中心；不再只在 `mouseDown` 跳一次。
+- `overviewResizeTo()` + `overviewHitTest()`：白框左右两端各有 5–9 px 命中区，鼠标变为左右箭头；拖动一端，固定另一端，按拖动宽度重算 Speed（0.1–4x，视窗跨度不超过已加载范围），效果等同 Speed 拉杆或 Ctrl+滚轮。选中 Print 时仍保留其 `view.zoomX`，不改变打印时长。
+- 白框绘制增加两端 2.5 px 抓手；`mouseDrag` 在概览手势中优先处理 scrub/resize，`mouseUp` 清理 `overviewHandle`。提示文字补充“下方波形可按住拖动连续定位；拖动白框左右两端可缩放时间视图（等同 Speed / Ctrl+滚轮）”。
+
+### 配套样式与独立版
+
+- LookAndFeel 新增 `round` 按钮样式（白底圆形、大字号），右下角“导出”使用；按钮圆角从固定 5 px 改为 5–14 px；播放按钮去掉底框，只留更大的白色图标，用透明度表达 hover/press。
+- 独立版窗口从 1240×722 缩小为 **1240×680**，最小 930×510，固定 1240/680 比例；播放/导出/音频设备/文件名改为由 `SpectrumTagAudioProcessorEditor::standaloneSlots()` 统一换算，诊断按钮在加载模式左移让位。
+- 关闭窗口先在 `systemRequestedQuit()` 隐藏主窗口再 `quit()`，消除“关闭时界面消失-重现-再消失”的闪烁；会话保存仍在析构路径完成。
+- `setComponentID("editor")` 便于测试直接从独立版窗口取到编辑器。
+
+### 验证
+
+- `SpectrumTag_VST3`、`SpectrumTagStandalone` 重新编译通过。
+- `SpectrumTagVerify --checks <fresh-dir>` 全套通过（含 Interaction/Recording/Noise/Timeline/1.4.6–1.4.12/1.4.16–1.4.27）。
+- 独立版 `--fileless-ui-test <fresh-dir>` 通过；新增断言覆盖：空工作区引导框可见、无音频点击不创建 Print 且高亮引导、概览拖动 seek 到 6.0 s、白框右端拖动后视窗约 5 s、加载静音 WAV 后才允许 Print 且产生声音、Clear/Undo/Delete 与导出弹窗回归。
+- 为适配上述交互，更新了 `InteractionChecks`（无图时眼睛不再隐藏引导框）、`RecordingChecks` / `Revision148`（先加载真实图片再测眼睛切换）、`Revision147`（图片可见时点击频谱会打印，测 seek 前先隐藏原图）、`Revision1412`（选中 Print 会覆盖原图编辑层，测预览前先隐藏原图）、`Revision1416`（选中后刷新时机）。这些是测试前提更新，不是放宽产品断言。
+- 未在本地实编 ARA target（本机无 ARA SDK）；改动位于共享编辑器/处理器头，VST3 与独立版已编译通过，ARA 分支同样走 `isLoadMode()` 与 `hasLoadedAudio()`。
+- 仍存边界：没有重新生成 Windows/macOS 安装包；未做真实宿主听测；`README.md` 与 1.4.23 历史段落仍保留“空白时间轴直接 Print”的旧描述，以本节和“需求调整的最终结论”为准。
+
+## 2.0.0 源码基线：界面与字体重做（2026-11-10）
+
+用户要求按原有视觉风格整体重做界面，并把源码版本提升为 **2.0.0**，作为换机继续开发的固定基线。
+
+- **按钮**：`SpectrumTagLookAndFeel` 新增扁平按钮绘制，按 `spectrumTagStyle` 区分 `primary`（白底黑字）、`ghost`（无底色，工具入口）和默认深灰次要按钮；所有 JUCE `TextButton`、弹出菜单、进度条和数值框统一，独立版顶栏与导出/进度/音频设备弹窗也套用同一主题。
+- **中文字体**：优先 `Noto Sans SC`，按 Black/Heavy/Bold/Semibold 取最重字重；无此字体时按 Source Han Sans SC → HarmonyOS Sans SC → MiSans → 微软雅黑 → 等线/黑体的顺序回退。实测墨迹高度（100 px）：Basement `H` 66、`x` 51、`Range:` 84；Noto `国` 64、`显示上限` 66。18 px 时英文 `Speed:` 墨迹 15 px/宽 58 px，中文 `速度:` 13 px/宽 29 px，因此中文统一乘 1.15 光学补偿（`shared/PlatformFonts.h` 的 `chineseScale`）。
+- **独立版顶栏**：播放改为自绘矢量图标（播放三角 / 暂停双竖条），移除停止按钮；加载按钮文案改为“加载音频 / Load audio”；清空改为垃圾桶图标并右置到“显示上限”左侧。
+- **验证**：`SpectrumTag_VST3` 与 `SpectrumTagStandalone` 编译通过；`--fileless-ui-test` 中英文均通过（`exit=0`）。本轮不重新生成安装包，1.4.28 的 Windows Setup / macOS PKG 仍是最近交付。
+- **版本来源**：只改 `CMakeLists.txt` 的 `project(SpectrumTag VERSION 2.0.0)`；`juce_add_plugin`、`juce_add_gui_app`、Windows 打包脚本和 CI 都从 CMake 读取版本。`packaging/windows/installer.iss` 的缺省 `Version` 已同步为 2.0.0。
 
 ## 当前完成状态：1.4.28 安装包、公开 Release 与增量交接（2026-11-09）
 
@@ -228,13 +544,16 @@ ARA 源读取发生在宿主允许的模型线程；音频回调和 DSP worker �
 | Noise Fill | 仅已录制/加载模式，0–100%；限图片时间/频率范围内，受边缘淡化约束，不填未录到的时间空隙 |
 | 参数微调 | Shift 拖动/控件滚轮约为普通灵敏度的 1/10；Alt+左键或双击恢复默认 |
 | 频谱滚轮 | 普通滚轮平移时间，短缓动；Ctrl 或 Shift + 滚轮横向缩放视图，不重新渲染已选 Print，无纵向缩放 |
+| 下方波形 | 按住拖动连续定位；白框两端 5–9 px 拖拽缩放时间视图，等价 Speed / Ctrl+滚轮；跨度限制在已加载范围内 |
 | Speed 拉杆 | 选中 Print 时改变其时长，需要渲染；手势期间先预览，松手后提交 |
-| 原图 | 一直保持原比例；单击选择/移动，双击加载；新图载入后自动显示，记忆上次图片 |
+| Print 入口 | Print 按钮隐藏；图片可见且未选中 Print 时，点击频谱任意空白处自动打印；点击图片框本身不打印 |
+| 未加载音频 | 独立版 / ARA 必须先有真实音频；空白画布点击频谱被拦截，顶部引导条闪烁，点击引导条加载 |
+| 原图 | 一直保持原比例；单击选择/移动，空框单击或双击加载；新图载入后自动显示，记忆上次图片；无图时显示投放引导且不可隐藏 |
 | Print 选择 | 第一次点击即恢复保存参数、频率刻度和正常显示比例；再次点击可复原滚轮造成的视觉拉伸 |
 | Print 移动/缩放 | 选中后拖动位置，右下角等比例缩放；只在松手时真正渲染，整个手势是一个撤销操作 |
 | 边框/删除 | 仅选中时显示边框；Delete 删除；提示为“Delete 键删除” / “Press Delete to Remove” |
 | Undo/Redo | Ctrl+Z / Ctrl+Shift+Z；工具栏改为上/下一个 Print，缺少对应图形则禁用，不移动播放指针 |
-| 原图显示/全览 | 眼睛按钮或频谱右键显示/隐藏原图；频谱右上角独立 Fit 图标 |
+| 原图显示/全览 | 有图时眼睛按钮或频谱右键显示/隐藏原图；无图时引导框固定显示、眼睛禁用；频谱右上角独立 Fit 图标 |
 | 语言/配色 | 8 个记忆圆形配色；中文/EN 按钮显示当前语言，控件文字和悬停说明一起切换 |
 
 Noise Fill 的轻量预览使用原始频谱功率、掩模、反转、保留音量、补偿底限与淡化估算；它不是最终波形的精确 FFT。相位、窗泄漏、随机纹理和声道相关性会产生差异，最终始终以真实渲染频谱替换模拟图。
@@ -261,6 +580,10 @@ Noise Fill 的轻量预览使用原始频谱功率、掩模、反转、保留音
 | Print 期间没有反馈 | 原图隐藏后，在实际 Print 位置显示模拟图、进度与阶段，完成后替换 |
 | 删除每次完整重渲染 | 保存原音频及其频谱/峰值，独立编辑删除走复用路径；有重叠时保留必要局部合成 |
 | 独立版需 EXE 旁运行库文件夹 | 1.4.19 改为 EXE 内嵌压缩资源，首次媒体操作释放并校验缓存 |
+| 独立版可在空白时间轴直接 Print（1.4.23） | 取消：1.4.23 的空白打印能力保留为历史；当前独立版/ARA 必须先加载真实音频，空白画布只显示引导 |
+| Print 圆按钮常驻右下角 | 隐藏；改为图片放置模式下点击频谱自动打印；隐藏入口仅供自动化、诊断与回归测试 |
+| 无图时仍可用眼睛按钮隐藏图片框 | 无图时引导框始终显示，眼睛按钮禁用；单击/双击/拖入图片后才恢复显示/隐藏 |
+| 下方波形只能按下定位 | 支持按住连续拖动定位；白框两端拖拽缩放，等价 Speed / Ctrl+滚轮 |
 
 <a id="history"></a>
 ## 按版本记录开发过程
@@ -443,7 +766,7 @@ Noise Fill 的轻量预览使用原始频谱功率、掩模、反转、保留音
 完整平台交接见 [MAC_AU_HANDOFF.md](docs/MAC_AU_HANDOFF.md)。以下事项在本轮没有完成：
 
 1. **目标与身份**：实时 `SpectrumTag_VST3/AU` 使用 `Iisa/SpTg`；ARA `SpectrumTagARA_VST3/AU` 使用 `Iisa/SpAr`、独立 factory/archive ID 和 AU export prefix。不要为复用安装器把两个身份合并。配置中的 arm64+x86_64/macOS 11 不是实际 Universal 2 验证结果。
-2. **编码器**：Windows PE 内嵌资源不可用于 Mac。非 Windows `resolveEncoder()` 当前除显式 SPECTRUMTAG_FFMPEG 覆盖外会报无内置编码器；需 app bundle helper、架构、执行权限、签名和 notice/对应许可来源处理。
+2. **编码器（2026-11-12 已实现）**：Windows 用 PE 内嵌资源，macOS 用 `Contents/Helpers/<arch>/ffmpeg`，由 CMake 在链接后自动写入；输入用 `packaging/macos/fetch-codec.sh`（或 `-DSPECTRUMTAG_MACOS_CODEC=/path/to/ffmpeg`）。仍缺 arm64 helper 的 M 芯片实机执行验证，也未做 Developer ID 签名/公证。
 3. **路径和测试**：检查媒体临时目录、选择器默认路径、录音缓存、测试 `_putenv_s` 和 UI 初始化/链接，改为对应平台的可写位置。不要假定 macOS 有 D:，也不要依赖 app bundle 可写。
 4. **字体/窗口**：中文优先 PingFang SC，其次 Hiragino Sans GB/Heiti SC/Songti SC，保留 UTF-8 和原嵌入标题字体；不复制 Windows 系统字体。验证 Retina、初次/再次打开、停靠/浮动、宿主尺寸改变和中文裁切，保持有上限的尺寸同步。
 5. **宿主行为**：分开验证 AU 扫描注册、ARA document/source 生命周期、同轨选择、源变更、播放/离线无 UI 输出、保存重开/filtered restore/native Undo，以及 Apple Silicon 原生和需支持的 Rosetta 情形。不要用禁用 SIP 代替兼容修复。
@@ -716,3 +1039,9 @@ AGPL-3.0，详见 [LICENSE](LICENSE) 与 [README.md](README.md) 的许可证章�
 
 
 </details>
+
+## 2026-11-18 · 子青版 2.0.9 Stable
+
+用户指定 Windows 独立版 2.0.9 为 Stable。2.0.4 至 2.0.9 依次改进实时模拟预览、显式打印与取消、底层频谱恢复、移动与复制、风格切换，以及图片与已打印图案两种编辑模式。上一公开完整安装包为 1.4.28。2.0.9 Windows 独立版 SHA-256 为 99FDFE4B84D9A40E60949BD72B29095A2149DBD70A497DF1D1A803352A27599B。已通过鼠标事件、回归与安装位置启动验证。插件交互移植属于后续版本。
+
+The user designated the Windows standalone 2.0.9 as Stable. In image mode the spectrum prediction follows a parameter gesture and the converted artwork returns on release. In Print mode the prediction remains until the user commits. Right-click toggles the source, and reopening it in empty space centres a new placement. The last published cross-platform installer is 1.4.28.

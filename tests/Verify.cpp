@@ -35,6 +35,9 @@ static ImageBoxComponent* imageBox(juce::Component& root) {
 #include "Revision146Checks.h"
 #include "Revision147Checks.h"
 #include "Revision148Checks.h"
+#include "Revision201Checks.h"
+#include "Revision202Checks.h"
+#include "Revision204Checks.h"
 #include "../shared/TimeScale.h"
 #include "Revision149Checks.h"
 #include "Revision1410Checks.h"
@@ -150,6 +153,8 @@ static void checks(const juce::File& dir) {
     revision146Checks(dir);
     revision147Checks(dir);
     revision148Checks(dir);
+    revision201Checks(dir);
+    revision202Checks(dir);
     revision149Checks(dir);
     revision1410Checks(dir);
     revision1411Checks(dir);
@@ -162,13 +167,51 @@ static void checks(const juce::File& dir) {
     std::cout<<"ALL CHECKS PASSED\n";
 }
 
+static void writeTestFixtures(const juce::File& dir){
+    juce::Image artwork(juce::Image::ARGB,160,96,true);
+    {juce::Graphics g(artwork);g.setColour(juce::Colours::black);g.fillRect(12,12,136,72);
+        g.setColour(juce::Colours::white);g.fillEllipse(56.0f,28.0f,48.0f,40.0f);}
+    png(dir.getChildFile("transparent-detail.png"),artwork);
+}
 int main(int argc,char**argv) {
     juce::ScopedJuceInitialiser_GUI init;
+    if(argc==3&&std::string(argv[1])=="--measure-reopen"){try{
+        const juce::File xmlFile(argv[2]);
+        auto doc=juce::XmlDocument::parse(xmlFile);
+        require(doc&&doc->getChildByName("SpectrumTagState"),"standalone session XML");
+        juce::MemoryBlock state;juce::AudioProcessor::copyXmlToBinary(*doc->getChildByName("SpectrumTagState"),state);
+        const double start=juce::Time::getMillisecondCounterHiRes();
+        SpectrumTagAudioProcessor p;p.filePlayerMode=true;p.recording().allowFilePrintExtension();
+        p.setStateInformation(state.getData(),(int)state.getSize());
+        std::unique_ptr<juce::AudioProcessorEditor> editor(p.createEditor());
+        auto* view=componentWithID(*editor,"spectrumView");
+        while(juce::Time::getMillisecondCounterHiRes()-start<120000){
+            juce::Timer::callPendingTimersSynchronously();
+            if(auto audio=p.recording().snapshot();audio&&!audio->empty()&&view->getProperties().contains("rasterRevision")
+                &&(int)view->getProperties()["rasterRevision"]==audio->revision){
+                auto visible=view->createComponentSnapshot(view->getLocalBounds());
+                std::cout<<"firstFrameMs="<<juce::Time::getMillisecondCounterHiRes()-start
+                    <<" seconds="<<audio->end()-audio->start()<<" prints="<<audio->edits.size()
+                    <<" cacheHits="<<p.recording().cacheHits()<<" printPasses="<<p.recording().printPasses()<<"\n";
+                return visible.isValid()?0:1;
+            }
+            juce::Thread::sleep(3);
+        }
+        return 1;
+    }catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}
     if(argc==3&&std::string(argv[1])=="--checks1427"){try{revision1427Checks(juce::File(argv[2]));return 0;}catch(const std::exception& e){std::cerr<<"FAIL: "<<e.what()<<"\n";return 1;}}
+    if(argc==3&&(std::string(argv[1])=="--checks201"||std::string(argv[1])=="--checks202"||std::string(argv[1])=="--checks204")){try{juce::File dir(argv[2]);dir.createDirectory();
+      #if JUCE_WINDOWS
+        _putenv_s("SPECTRUMTAG_PREFS_DIR",dir.getChildFile("preferences-test").getFullPathName().toRawUTF8());
+      #endif
+        writeTestFixtures(dir);
+        if(std::string(argv[1])=="--checks204")revision204Checks(dir);else if(std::string(argv[1])=="--checks202")revision202Checks(dir);else revision201Checks(dir);
+        return 0;}catch(const std::exception& e){std::cerr<<"FAIL: "<<e.what()<<"\n";return 1;}}
     if(argc==3 && (std::string(argv[1])=="--checks1410"||std::string(argv[1])=="--checks1412"||std::string(argv[1])=="--checks1421")) {try {juce::File dir(argv[2]);dir.createDirectory();
       #if JUCE_WINDOWS
         _putenv_s("SPECTRUMTAG_PREFS_DIR",dir.getChildFile("preferences-test").getFullPathName().toRawUTF8());
       #endif
+        writeTestFixtures(dir);
         if(std::string(argv[1])=="--checks1421")revision1421Checks(dir);else if(std::string(argv[1])=="--checks1412")revision1412Checks(dir);else revision1410Checks(dir);return 0;}catch(const std::exception& e){std::cerr<<"FAIL: "<<e.what()<<"\n";return 1;}}
     if(argc==3 && std::string(argv[1])=="--checks") {try {checks(juce::File(argv[2]));return 0;}catch(const std::exception& e){std::cerr<<"FAIL: "<<e.what()<<"\n";return 1;}}
     if(argc<4) {std::cerr<<"outdir image fftSize\n"; return 2;}

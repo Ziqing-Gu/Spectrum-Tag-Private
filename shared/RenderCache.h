@@ -40,13 +40,14 @@ public:
         if(s.fileSourceLast>0&&(s.last>s.fileSourceLast||s.first<0)){bytes.writeString("standalone-print-extent-v1");bytes.writeInt64(s.fileSourceLast);}
         rawHashes.append(bytes,s.original,s.channels);
         if(analysisOnly)wetHashes.append(bytes,s.rendered,s.channels);
-        else for(const auto& e:s.edits){bytes.writeString(e.id);bytes.writeDouble(e.start);bytes.writeDouble(e.duration);bytes.writeFloat(e.low);bytes.writeFloat(e.high);bytes.writeFloat(e.ratio);bytes.writeFloat(e.compensation);bytes.writeBool(e.invert);bytes.writeInt(e.fftSize);bytes.writeInt(e.rows);bytes.writeInt(e.cols);bytes.writeInt(e.fillVersion);for(float v:*e.mask)bytes.writeFloat(v);}
+        else for(const auto& e:s.edits){bytes.writeString(e.id);bytes.writeDouble(e.start);bytes.writeDouble(e.duration);bytes.writeFloat(e.low);bytes.writeFloat(e.high);bytes.writeFloat(e.ratio);bytes.writeFloat(e.compensation);bytes.writeBool(e.invert);bytes.writeInt(e.fftSize);bytes.writeInt(e.rows);bytes.writeInt(e.cols);bytes.writeInt(e.fillVersion);writeFloats(bytes,e.mask->data(),e.mask->size());}
         return juce::SHA256(bytes.getData(),bytes.getDataSize()).toHexString();
     }
     bool load(const juce::String& key,RecordingSnapshot& s,bool* spectrumCurrent=nullptr){
         auto input=file(key).createInputStream();if(!input||input->getTotalLength()<40)return false;
         const auto length=input->getTotalLength()-32;juce::SubregionStream body(input.get(),0,length,false);
-        const auto expected=juce::SHA256(body).getRawData();juce::MemoryBlock actual(32);
+        juce::BufferedInputStream bufferedBody(body,128*1024);
+        const auto expected=juce::SHA256(bufferedBody).getRawData();juce::MemoryBlock actual(32);
         input->setPosition(length);if(input->read(actual.getData(),32)!=32||actual!=expected)return false;
         input->setPosition(0);juce::SubregionStream compressed(input.get(),0,length,false);juce::GZIPDecompressorInputStream in(compressed);
         const int format=in.readInt();
@@ -83,7 +84,9 @@ public:
                     out.writeByte(1);for(const auto& frame:tile->frames)out.write(frame.level.data(),(size_t)(s.fftSize/2+1));}}
             out.writeInt(0x454e4421);out.flush();}
         output->flush();if(output->getStatus().failed())return false;output.reset();
-        const auto digest=juce::SHA256(temporary.getFile()).getRawData();output=temporary.getFile().createOutputStream();if(!output||!output->write(digest.getData(),digest.getSize()))return false;output->flush();if(output->getStatus().failed())return false;output.reset();
+        juce::MemoryBlock digest;
+        {juce::FileInputStream fileInput(temporary.getFile());if(fileInput.getStatus().failed())return false;juce::BufferedInputStream buffered(fileInput,128*1024);digest=juce::SHA256(buffered).getRawData();}
+        output=temporary.getFile().createOutputStream();if(!output||!output->write(digest.getData(),digest.getSize()))return false;output->flush();if(output->getStatus().failed())return false;output.reset();
         return !cancelled()&&temporary.overwriteTargetFileWithTemporary();
     }
 };
