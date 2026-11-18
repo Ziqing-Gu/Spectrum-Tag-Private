@@ -1838,7 +1838,7 @@ bool SpectrumTagAudioProcessor::undoUserChange(bool redo){
     auto change=std::move(from.back());from.pop_back();const auto& target=redo?change.after:change.before;
     restoringUserState=true;cancelPrint();
 #if SPECTRUMTAG_ARA
-    if(target.ara){if(auto* view=getEditorView<spectrumtag::ara::View>())view->restoreState(*target.ara);clearSpectrumHistory();}
+    if(target.ara){if(auto* view=getEditorView<spectrumtag::ara::View>())view->restoreState(*target.ara);if(change.sourceChange)clearSpectrumHistory();}
     else
 #endif
     if(change.sourceChange){recordingEngine.restoreDocument(target.document);if(!target.document.enabled)clearSpectrumHistory();}

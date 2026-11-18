@@ -291,8 +291,16 @@ void View::restoreState(const ViewState& state){
     // Stable IDs, not raw model pointers, make the undo record safe after host edits.
     for(auto* source:owner.getDocument()->getAudioSources<Source>())for(auto* m:source->getAudioModifications<Modification>())
         for(const auto& entry:state.modifications)if(m->getPersistentID()==entry.modification){
-            m->edits=entry.edits;owner.sync(*m,true);break;
+            if(m->edits.size()!=entry.edits.size()||!std::equal(m->edits.begin(),m->edits.end(),entry.edits.begin(),sameEdit)){
+                m->edits=entry.edits;owner.sync(*m,true);
+            }
+            break;
         }
+    if(loaded&&state.loaded&&manualLoadOnly==state.manualLoadOnly){
+        // Keep the current track and geometry while its prior edit list is restored.
+        // The composer will publish a new projection when the source renders settle.
+        requested=composer.cancel();engine.cancelPresentation();signature.clear();tick(true);return;
+    }
     loaded=state.loaded;manualLoadOnly=state.manualLoadOnly;signature.clear();projections.clear();
     requested=composer.request({});engine.present({});engine.setExternalProgress(false,1);
     if(loaded){owner.warmup();tick(true);}

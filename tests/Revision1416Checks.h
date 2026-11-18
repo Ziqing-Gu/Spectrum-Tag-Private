@@ -101,6 +101,7 @@ inline void ui(SpectrumTagAudioProcessor& p,const juce::File& dir,const std::fun
             {auto out=dir.getChildFile("1418-resize-preview.png").createOutputStream();juce::PNGImageFormat png;if(out){out->setPosition(0);out->truncate();png.writeImageToStream(view->createComponentSnapshot(view->getLocalBounds()),*out);}}
             need(std::abs(resized.getWidth()/resized.getHeight()-old.imageAspect)<.015f,"1418 proportional resize preview and border");
             need(std::abs(resized.getX()-anchor.getX())<.02f&&std::abs(resized.getY()-anchor.getY())<.02f,"1418 resize must retain top-left anchor");
+            if(std::abs(resized.getHeight()/anchor.getHeight()-factor)>=.015f)std::cerr<<"resize mode="<<mode<<" factor="<<factor<<" anchor="<<anchor.toString()<<" displayed="<<resized.toString()<<" old start="<<old.start<<" duration="<<old.duration<<"\n";
             need(std::abs(resized.getHeight()/anchor.getHeight()-factor)<.015f,"1418 corner must shrink AND enlarge Print");
             need(p.recording().snapshot()==beforeAudio&&sameGeometry(p.recording().edits()->front(),old),"1418 drag must not render audio or mutate desired Print");
             need(!hostSeeks||hostSeeks()==oldSeeks,"1418 resize must not seek host");
@@ -111,7 +112,7 @@ inline void ui(SpectrumTagAudioProcessor& p,const juce::File& dir,const std::fun
             need(after.mask&&after.mask->size()==(size_t)after.rows*after.cols&&after.id==old.id,"1418 resize replaces same Print with valid full mask");
             const auto done=paintBounds();need(std::abs(done.getWidth()/done.getHeight()-old.imageAspect)<.015f,"1418 final border keeps aspect");
             editor->keyPressed(juce::KeyPress('z',juce::ModifierKeys::ctrlModifier,0));
-            wait([&]{return renderFinished()&&sameGeometry(p.recording().snapshot()->edits.front(),old);},"1418 one Undo restores complete resize");
+            wait([&]{auto s=p.recording().snapshot();return s&&!p.recording().isBusy()&&s->edits.size()==1&&sameGeometry(s->edits.front(),old);},"1418 one Undo restores complete resize");
             editor->keyPressed(juce::KeyPress('z',juce::ModifierKeys::ctrlModifier|juce::ModifierKeys::shiftModifier,0));
             wait([&]{return renderFinished()&&sameGeometry(p.recording().snapshot()->edits.front(),after);},"1418 Redo restores complete resize");
         }
