@@ -3,6 +3,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: spectrumtag-installers-${{ github.ref }}
   cancel-in-progress: false
@@ -13,9 +14,7 @@ jobs:
       matrix:
         include:
           - arch: arm64
-            runner: macos-15
-          - arch: x86_64
-            runner: macos-15-intel
+            runner: macos-26
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     env:
@@ -24,6 +23,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: 654cfb47cee71aa8046a392fd77f3533f8e273b7
       - uses: actions/cache/restore@v4
         id: native-cache
         with:
@@ -54,10 +54,18 @@ jobs:
         with:
           path: build
           key: spectrumtag-mac-${{ matrix.arch }}-build-v2-${{ github.event.repository.name }}-${{ github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-arm64
+          path: codec-reference
+          run-id: 42562703901
+          github-token: ${{ github.token }}
       - name: Bundle native audio and video codec
         id: codec
         run: |
-          brew list ffmpeg-full >/dev/null 2>&1 || brew install ffmpeg-full
+          mkdir codec15
+          tar -xzf codec-reference/native-arm64.tar.gz -C codec15
+          codesign --verify --deep --strict codec15/SpectrumTag.app
           mkdir -p native
           ditto build/SpectrumTag_artefacts/Release/VST3/SpectrumTag.vst3 native/SpectrumTag.vst3
           ditto 'build/SpectrumTagARA_artefacts/Release/VST3/SpectrumTag ARA.vst3' 'native/SpectrumTag ARA.vst3'
@@ -68,7 +76,13 @@ jobs:
             codesign --force --deep --sign - "$bundle"
             codesign --verify --deep --strict "$bundle"
           done
-          python3 packaging/macos/bundle_codec.py "$(brew --prefix ffmpeg-full)/bin/ffmpeg" native/SpectrumTag.app ${{ matrix.arch }}
+          ditto codec15/SpectrumTag.app/Contents/Helpers native/SpectrumTag.app/Contents/Helpers
+          ditto codec15/SpectrumTag.app/Contents/Resources/ThirdParty native/SpectrumTag.app/Contents/Resources/ThirdParty
+          for executable in native/*/Contents/MacOS/*; do
+            archs=$(lipo -archs "$executable")
+            test "$archs" = arm64
+            xcrun vtool -show-build "$executable" | awk '/minos/ { seen=1; if ($2+0>15.0) exit 1 } END { if (!seen) exit 1 }'
+          done
           cp LICENSE native/SpectrumTag.app/Contents/Resources/SpectrumTag-LICENSE.txt
           codesign --force --deep --sign - native/SpectrumTag.app
       - name: Processor, ARA host and media regression checks
@@ -123,10 +137,12 @@ jobs:
             checks/**/*.png
   mac-installer:
     needs: mac-native
-    runs-on: macos-15
+    runs-on: macos-15-intel
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: 654cfb47cee71aa8046a392fd77f3533f8e273b7
       - name: Read package version from source
         id: version
         run: |
@@ -135,8 +151,12 @@ jobs:
           echo "value=$version" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
         with:
-          pattern: native-*
-          merge-multiple: true
+          name: native-arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-x86_64
+          run-id: 44289471875
+          github-token: ${{ github.token }}
       - name: Merge universal binaries and build installer
         run: |
           mkdir arm64 x86_64
